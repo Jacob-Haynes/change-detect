@@ -1,4 +1,5 @@
-# Run change-detect on a Windows laptop (secondary path; the HQ Mac is primary).
+# Run change-detect on a Windows laptop (secondary path; the Mac stations are primary).
+# Reads configuration from the ENVIRONMENT only. Foreground until Ctrl+C.
 # Usage: powershell -ExecutionPolicy Bypass -File scripts\run-laptop.ps1 [--simulate]
 $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
@@ -6,22 +7,14 @@ $Repo = (Get-Location).Path
 $Venv = Join-Path $Repo ".venv-laptop"
 $Py = Join-Path $Venv "Scripts\python.exe"
 
-if (-not (Test-Path "laptop.env")) {
-    Copy-Item "deploy\laptop.env.example" "laptop.env"
-    Write-Host ">> Created laptop.env: set MQTT_PASS (the isrkit password from the Pi)."
+$defaults = @{ TAK_HOST = "isr-pi.local"; TAK_PORT = "8087"; MQTT_HOST = "isr-pi.local"; MQTT_PORT = "1883";
+               MQTT_USER = "isrkit"; WEB_PORT = "8130"; VLM_URL = "http://localhost:11434"; VLM_MODEL = "qwen3-vl:8b";
+               CHANGE_DETECT_PROFILE = "laptop"; CHANGE_DETECT_DATA_DIR = (Join-Path $HOME "change-detect-data") }
+foreach ($k in $defaults.Keys) {
+    if (-not [Environment]::GetEnvironmentVariable($k, "Process")) { [Environment]::SetEnvironmentVariable($k, $defaults[$k], "Process") }
 }
-foreach ($line in Get-Content "laptop.env") {
-    if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
-        if (-not [Environment]::GetEnvironmentVariable($Matches[1], "Process")) {
-            [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2].Trim(), "Process")
-        }
-    }
-}
-if (-not $env:CHANGE_DETECT_DATA_DIR) { $env:CHANGE_DETECT_DATA_DIR = Join-Path $HOME "change-detect-data" }
-if (-not $env:CHANGE_DETECT_PROFILE) { $env:CHANGE_DETECT_PROFILE = "laptop" }
 
 if (-not (Test-Path $Py)) {
-    Write-Host ">> Creating $Venv"
     $made = $false
     foreach ($v in "3.12", "3.11", "3.13") {
         & py "-$v" -m venv $Venv 2>$null
@@ -33,13 +26,11 @@ $stamp = Join-Path $Venv ".deps-installed"
 if (-not (Test-Path $stamp)) {
     & $Py -m pip install -q --upgrade pip
     if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
-        Write-Host ">> NVIDIA GPU found: installing CUDA PyTorch"
+        Write-Host "[change-detect] NVIDIA GPU found: installing CUDA PyTorch"
         & $Py -m pip install -q torch torchvision --index-url https://download.pytorch.org/whl/cu124
     }
     & $Py -m pip install -q -r requirements-desktop.txt
     New-Item -ItemType File $stamp | Out-Null
 }
-$accel = & $Py -c "from changedetect.labeler import detect_accelerator as d; print(d())"
-Write-Host ">> Accelerator: $accel | TAK $($env:TAK_HOST):$($env:TAK_PORT) | MQTT $($env:MQTT_USER)@$($env:MQTT_HOST)"
-Write-Host ">> Web UI: http://localhost:$(if ($env:WEB_PORT) { $env:WEB_PORT } else { 8130 })/"
-& $Py -m changedetect --profile $env:CHANGE_DETECT_PROFILE @args
+if (-not $env:MQTT_PASS) { Write-Host "[change-detect] WARNING: MQTT_PASS is empty" }
+& $Py -m changedetect --host 0.0.0.0 --port $env:WEB_PORT --profile $env:CHANGE_DETECT_PROFILE @args

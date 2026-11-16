@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import signal
 import threading
 
 import uvicorn
@@ -67,7 +68,21 @@ def main(argv=None):
         threading.Thread(target=warm, daemon=True).start()
 
     log.info("Change Detect web UI at http://%s:%d", args.host, settings.port)
-    uvicorn.run(app, host=args.host, port=settings.port, log_level="warning")
+    # uvicorn shuts down gracefully on SIGTERM/SIGINT, then re-raises the signal into the handler
+    # that was installed before it started. Make that handler a clean exit (status 0) so the
+    # finally block below runs and publishes the retained "stopped" heartbeat.
+    def _clean_exit(signum, frame):
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _clean_exit)
+    signal.signal(signal.SIGINT, _clean_exit)
+    try:
+        # uvicorn handles SIGINT/SIGTERM with a graceful shutdown and then returns here
+        uvicorn.run(app, host=args.host, port=settings.port, log_level="warning", timeout_graceful_shutdown=5)
+    finally:
+        svc.heartbeat.stop()
+        svc.cot.stop()
+        log.info("Change Detect stopped")
 
 
 if __name__ == "__main__":

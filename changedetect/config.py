@@ -15,7 +15,8 @@ DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
 DEFAULT_PORT = 8130
 # Ollama vision model on the HQ Mac (Qwen3-VL is in Ollama's vision library). Override with VLM_MODEL.
 DEFAULT_VLM_MODEL = "qwen3-vl:8b"
-DEFAULT_VLM_URL = "http://localhost:11434/v1"
+# Bare Ollama base URL (no path); the client appends /v1/... itself.
+DEFAULT_VLM_URL = "http://localhost:11434"
 
 # Processing resolution per deployment profile: the Pi downscales for speed, the laptop keeps
 # full-resolution stills (alignment itself always runs on a <=2000 px copy).
@@ -91,7 +92,7 @@ class Settings:
             yolo_backend=_env("YOLO_BACKEND", "auto"),
             yolo_weights=_env("YOLO_WEIGHTS"),
             vlm_backend=_env("VLM_BACKEND", "auto"),
-            vlm_url=_env("VLM_URL", DEFAULT_VLM_URL).rstrip("/"),
+            vlm_url=_env("VLM_URL", DEFAULT_VLM_URL),
             vlm_model=_env("VLM_MODEL", DEFAULT_VLM_MODEL),
             vlm_api_key=_env("VLM_API_KEY"),
             profile=(profile or _env("CHANGE_DETECT_PROFILE", "pi")),

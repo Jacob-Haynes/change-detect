@@ -46,8 +46,13 @@ The header always shows which modes are active: `SIMULATE`, profile and accelera
 (`PI · CPU · 1600px`, `LAPTOP · MPS · full-res`), the AI suggestion source (local VLM, Gemini
 cloud, or off), YOLO on/off and its device, TAK connection, and mesh state.
 
-Every 10 s it publishes a retained heartbeat to `isrkit/heartbeat/change-detect`
-(`{"tool","host","url","mode","status","ts"}`), so the Pi launcher can link to it wherever it runs.
+Every 10 s it publishes a retained heartbeat to `isrkit/heartbeat/change-detect`, so the Pi
+launcher can link to it wherever it runs. The payload is
+`{"tool":"change-detect","host":"isr-hq","url":"http://isr-hq.local:8130/","mode":"mps","status":"ok","ts":…}`.
+- `mode` is `cpu`, `mps`, `cuda` or `simulate`.
+- `status` is `ok`, or `degraded` when ATAK markers are stuck in the queue or a mesh send failed.
+- On a clean exit (SIGTERM) it publishes a retained `stopped`. If the process dies uncleanly, the
+  MQTT last-will publishes `error`.
 
 ## Install on the Pi
 
@@ -71,7 +76,7 @@ sudo pi-profiles bft-change-detect      # with OpenTAKServer + mesh bridge, for 
 | `TAK_HOST` / `TAK_PORT` | `127.0.0.1` / `8087` | CoT TCP output. If the TAK server is down, markers queue and retry with backoff. |
 | `MQTT_HOST` / `MQTT_PORT` / `MQTT_USER` / `MQTT_PASS` | `127.0.0.1` / `1883` / `guest` / `guest` | Publishes to `meshbus/tx`. It never opens the radio itself. |
 | `VLM_BACKEND` | `auto` | `auto` (local VLM → Gemini → off), `openai_compat`, `gemini` or `off`. |
-| `VLM_URL` / `VLM_MODEL` | `http://localhost:11434/v1` / `qwen3-vl:8b` | OpenAI-compatible vision endpoint (Ollama). |
+| `VLM_URL` / `VLM_MODEL` | `http://localhost:11434` / `qwen3-vl:8b` | **Bare** Ollama base URL, with no path (the tool appends `/v1/chat/completions`). On the Pi, set `http://isr-hq.local:11434`. |
 | `GEMINI_API_KEY` | empty | Empty means no cloud. Set it to allow Gemini suggestions. |
 | `GEMINI_MODEL` | `gemini-3.8-flash` | Any current Gemini model that accepts images. |
 | `YOLO_BACKEND` | `auto` | `auto` uses ultralytics (PyTorch) if installed (laptop), else ONNX via OpenCV (Pi). `off` disables YOLO. |
@@ -103,15 +108,26 @@ and poor results on top-down drone imagery from height.
 
 ## Running on a laptop
 
-The Pi stays the hub (hotspot, OpenTAKServer, mesh bridge, MQTT broker, launcher). change-detect
-can instead run on the **HQ Mac** (Apple Silicon, the analysis station). The Mac joins the Pi's
-hotspot, and everything else works the same.
+The Pi `isr-pi.local` (hotspot 192.168.4.1) stays the hub: hotspot, OpenTAKServer, mesh bridge,
+MQTT broker and launcher. change-detect runs on the **HQ Mac** `isr-hq.local` (M5 Pro, which also
+runs Ollama) as the analysis station. The Mac joins the Pi's hotspot.
+
+`scripts/run-laptop.sh` reads its configuration **from the environment only**. The platform's
+`laptop/start-mac.sh` sources `~/.config/isr-kit/station.env` and then calls it; see
+`deploy/station.env.example` for the keys. The script:
+- creates `.venv-laptop` on first run and installs `requirements-desktop.txt`, which includes PyTorch;
+- binds `0.0.0.0:8130` and runs in the foreground;
+- exits 0 on SIGTERM or Ctrl+C, after publishing a retained `stopped` heartbeat;
+- keeps the Mac awake while it runs.
+
+Defaults when a variable is unset: `TAK_HOST=isr-pi.local`, `TAK_PORT=8087`,
+`MQTT_HOST=isr-pi.local`, `MQTT_PORT=1883`, `MQTT_USER=isrkit`, `MQTT_PASS` (it must be set),
+`VLM_URL=http://localhost:11434`, `VLM_MODEL=qwen3-vl:8b`, `CHANGE_DETECT_PROFILE=laptop`.
 
 ```bash
 git clone <this repo> && cd change-detect
-scripts/run-laptop.sh                 # first run: creates laptop.env and .venv-laptop, installs PyTorch
-# edit laptop.env: MQTT_PASS = the isrkit password from the Pi, then run again
-open http://localhost:8130/
+MQTT_PASS=<isrkit password> scripts/run-laptop.sh      # or via the platform's laptop/start-mac.sh
+open http://isr-hq.local:8130/
 ```
 
 - **Laptop profile.** Stills stay at **full resolution**: GoPro 27 MP, 360 at 5.7K+, 4K drone
@@ -123,9 +139,7 @@ open http://localhost:8130/
   `ollama pull qwen3-vl:8b` (about 6 GB, fine on 64 GB). Leave `VLM_BACKEND=auto`: suggestions then
   stay on the Mac, and the UI shows "local VLM (qwen3-vl:8b)". If Ollama isn't running and
   `GEMINI_API_KEY` is set, it falls back to Gemini cloud.
-- **Pi address.** `laptop.env` points `TAK_HOST` and `MQTT_HOST` at `isr-pi.local`. If mDNS fails
-  on the hotspot, put in the Pi's fixed hotspot IP. Variables already set in your shell override
-  `laptop.env`.
+- **Pi address.** If mDNS fails on the hotspot, set `TAK_HOST` and `MQTT_HOST` to 192.168.4.1.
 - **MQTT from the laptop** must use the `isrkit` user, because RabbitMQ's `guest` account only
   works on the Pi itself.
 - **macOS prompts** "allow incoming connections" for Python the first time: allow it, so phones

@@ -18,11 +18,20 @@ from changedetect.gemini import PROMPT, GeminiAdvisor
 logger = logging.getLogger(__name__)
 
 
+def base_url(url: str) -> str:
+    """Normalise to the bare Ollama base URL (tolerates a trailing / or /v1)."""
+    u = (url or "").strip().rstrip("/")
+    if u.endswith("/v1"):
+        u = u[:-3]
+    return u
+
+
 class OpenAICompatAdvisor:
     name = "openai_compat"
 
     def __init__(self, url: str, model: str, api_key: str | None = None, timeout: float = 90.0):
-        self.url, self.model, self.api_key, self.timeout = url.rstrip("/"), model, api_key, timeout
+        self.url = base_url(url)
+        self.model, self.api_key, self.timeout = model, api_key, timeout
         self.last_error: str | None = None
         self._reach: tuple[float, bool] = (0.0, False)
 
@@ -41,7 +50,7 @@ class OpenAICompatAdvisor:
         if time.time() - t < 30:
             return ok
         try:
-            models = [m.get("id") for m in self._req("/models").get("data", [])]
+            models = [m.get("id") for m in self._req("/v1/models").get("data", [])]
             ok = self.model in models or any(m and m.split(":")[0] == self.model.split(":")[0] for m in models)
             self.last_error = None if ok else f"model {self.model} not pulled (ollama pull {self.model})"
         except Exception as e:
@@ -58,7 +67,7 @@ class OpenAICompatAdvisor:
                     {"type": "text", "text": PROMPT + (f" Detector's own guess: {hint}." if hint else "")},
                     img(before_jpg), img(after_jpg)]}]}
         try:
-            out = self._req("/chat/completions", body, timeout=self.timeout)
+            out = self._req("/v1/chat/completions", body, timeout=self.timeout)
             text = (out["choices"][0]["message"].get("content") or "").strip()
             # reasoning models may wrap their thinking; keep the last non-empty line
             if "</think>" in text:

@@ -1,5 +1,9 @@
 """Retained heartbeat on isrkit/heartbeat/change-detect every 10 s, so the Pi launcher can show this
-tool wherever it runs (Pi or HQ Mac). Broker down = log and keep retrying; never fatal."""
+tool wherever it runs (isr-pi or isr-hq). Broker down = log and keep retrying; never fatal.
+
+Payload: {"tool", "host" (short hostname), "url" (http://<host>.local:<port>/), "mode", "status", "ts"}
+status is ok | degraded | error while running; "stopped" (retained) after a clean exit; the MQTT
+last-will publishes "error" if the process dies without saying goodbye."""
 
 from __future__ import annotations
 
@@ -15,6 +19,10 @@ logger = logging.getLogger(__name__)
 TOOL = "change-detect"
 TOPIC = f"isrkit/heartbeat/{TOOL}"
 INTERVAL_S = 10
+
+
+def short_hostname() -> str:
+    return socket.gethostname().split(".")[0].lower() or "localhost"
 
 
 def local_ip(towards: str = "8.8.8.8") -> str:
@@ -50,33 +58,40 @@ class Heartbeat:
     def url(self) -> str:
         if self.public_url:
             return self.public_url
-        try:
-            target = socket.gethostbyname(self.mqtt_host)
-        except OSError:
-            target = "8.8.8.8"
-        return f"http://{local_ip(target)}:{self.port}/"
+        return f"http://{short_hostname()}.local:{self.port}/"
 
     def payload(self, status: str | None = None) -> dict:
-        return build_payload(socket.gethostname(), self.url(), self.mode_fn(), status or self.status_fn())
+        try:
+            st = status or self.status_fn()
+        except Exception:
+            st = "error"
+        return build_payload(short_hostname(), self.url(), self.mode_fn(), st)
 
     def start(self) -> None:
         if not self.enabled:
             return
-        threading.Thread(target=self._run, name="heartbeat", daemon=True).start()
+        self._thread = threading.Thread(target=self._run, name="heartbeat", daemon=True)
+        self._thread.start()
 
-    def stop(self) -> None:
+    def stop(self, timeout: float = 3.0) -> None:
+        """Publish a retained "stopped" (if connected) and disconnect. Safe to call twice."""
         self._stop.set()
+        t = getattr(self, "_thread", None)
+        if t is not None and t.is_alive():
+            t.join(timeout)
 
     def _connect(self):
         import paho.mqtt.client as mqtt
         c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"{TOOL}-{socket.gethostname()}"[:23])
         c.username_pw_set(self.user, self.password)
-        c.will_set(TOPIC, json.dumps(self.payload("offline")), qos=1, retain=True)
+        c.will_set(TOPIC, json.dumps(self.payload("error")), qos=1, retain=True)
 
         def on_connect(client, userdata, flags, reason_code, properties=None):
             self.connected = not getattr(reason_code, "is_failure", False)
             if not self.connected:
                 self.last_error = f"MQTT refused: {reason_code}"
+            elif not self._stop.is_set():
+                client.publish(TOPIC, json.dumps(self.payload()), qos=0, retain=True)  # announce at once
 
         def on_disconnect(client, userdata, flags, reason_code, properties=None):
             self.connected = False
@@ -112,7 +127,9 @@ class Heartbeat:
             self._stop.wait(INTERVAL_S)
         if self._client is not None:
             try:
-                self._client.publish(TOPIC, json.dumps(self.payload("offline")), qos=1, retain=True)
+                if self.connected:
+                    info = self._client.publish(TOPIC, json.dumps(self.payload("stopped")), qos=1, retain=True)
+                    info.wait_for_publish(timeout=2)
                 self._client.disconnect()
                 self._client.loop_stop()
             except Exception:

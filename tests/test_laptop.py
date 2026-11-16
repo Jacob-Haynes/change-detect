@@ -150,7 +150,7 @@ def test_vlm_openai_compat_then_off():
     srv = http.server.HTTPServer(("127.0.0.1", port), _FakeOllama)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
-        chain = vlm.AdvisorChain("auto", vlm.OpenAICompatAdvisor(f"http://127.0.0.1:{port}/v1", "qwen3-vl:8b"),
+        chain = vlm.AdvisorChain("auto", vlm.OpenAICompatAdvisor(f"http://127.0.0.1:{port}", "qwen3-vl:8b"),
                                  GeminiAdvisor(None, "gemini-3.8-flash"))
         assert chain.active() == "openai_compat"
         text, source = chain.describe(b"\xff\xd8before", b"\xff\xd8after", "new object")
@@ -164,6 +164,11 @@ def test_vlm_openai_compat_then_off():
     assert dead.active() == "off" and dead.describe(b"", b"") == (None, None)
 
 
+def test_vlm_base_url_normalised():
+    assert vlm.base_url("http://isr-hq.local:11434") == "http://isr-hq.local:11434"
+    assert vlm.base_url("http://isr-hq.local:11434/v1/") == "http://isr-hq.local:11434"
+
+
 def test_vlm_falls_back_to_gemini_when_local_down():
     chain = vlm.AdvisorChain("auto", vlm.OpenAICompatAdvisor(f"http://127.0.0.1:{_free_port()}/v1", "x"),
                              GeminiAdvisor("fake-key", "gemini-3.8-flash"))
@@ -174,8 +179,8 @@ def test_vlm_falls_back_to_gemini_when_local_down():
 # ---------------------------------------------------------------- heartbeat
 
 def test_heartbeat_payload_contract():
-    p = heartbeat.build_payload("hq-mac", "http://10.42.0.20:8130/", "mps", "ok", ts=123)
-    assert p == {"tool": "change-detect", "host": "hq-mac", "url": "http://10.42.0.20:8130/",
+    p = heartbeat.build_payload("isr-hq", "http://isr-hq.local:8130/", "mps", "ok", ts=123)
+    assert p == {"tool": "change-detect", "host": "isr-hq", "url": "http://isr-hq.local:8130/",
                  "mode": "mps", "status": "ok", "ts": 123}
     assert heartbeat.TOPIC == "isrkit/heartbeat/change-detect"
 
@@ -186,5 +191,77 @@ def test_heartbeat_broker_down_is_harmless():
     import time
     time.sleep(0.5)
     assert not hb.status()["connected"]
-    assert hb.payload()["url"].startswith("http://") and hb.payload()["url"].endswith(":8130/")
+    p = hb.payload()
+    assert p["url"] == f"http://{heartbeat.short_hostname()}.local:8130/" and "." not in p["host"]
     hb.stop()
+    assert not hb._thread.is_alive()
+
+
+def test_heartbeat_publishes_and_says_stopped():
+    """Against a minimal in-process MQTT 3.1.1 broker: retained ok, then retained stopped."""
+    import struct
+    got = []
+    srv = socket.socket()
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+
+    def read_packet(c):
+        h = c.recv(1)
+        if not h:
+            return None, b""
+        mult, length = 1, 0
+        while True:
+            b = c.recv(1)[0]
+            length += (b & 127) * mult
+            mult *= 128
+            if not b & 128:
+                break
+        body = b""
+        while len(body) < length:
+            body += c.recv(length - len(body))
+        return h[0], body
+
+    def broker():
+        c, _ = srv.accept()
+        c.settimeout(10)
+        try:
+            while True:
+                t, body = read_packet(c)
+                if t is None:
+                    break
+                kind = t >> 4
+                if kind == 1:  # CONNECT
+                    c.sendall(b"\x20\x02\x00\x00")
+                elif kind == 3:  # PUBLISH
+                    qos = (t >> 1) & 3
+                    tl = struct.unpack(">H", body[:2])[0]
+                    topic = body[2:2 + tl].decode()
+                    rest = body[2 + tl:]
+                    if qos:
+                        pid, rest = rest[:2], rest[2:]
+                        c.sendall(b"\x40\x02" + pid)
+                    got.append((topic, bool(t & 1), json.loads(rest)))
+                elif kind == 12:  # PINGREQ
+                    c.sendall(b"\xd0\x00")
+                elif kind == 14:  # DISCONNECT
+                    break
+        except OSError:
+            pass
+        finally:
+            c.close()
+
+    threading.Thread(target=broker, daemon=True).start()
+    hb = heartbeat.Heartbeat("127.0.0.1", port, "isrkit", "x", 8130, lambda: "mps", lambda: "ok")
+    hb.start()
+    import time
+    for _ in range(50):
+        if got:
+            break
+        time.sleep(0.1)
+    hb.stop()
+    srv.close()
+    assert got and got[0][0] == "isrkit/heartbeat/change-detect" and got[0][1] is True
+    assert got[0][2]["status"] == "ok" and got[0][2]["mode"] == "mps"
+    assert got[-1][2]["status"] == "stopped" and got[-1][1] is True

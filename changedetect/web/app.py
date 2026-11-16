@@ -58,8 +58,15 @@ class Services:
         self.batches = batch.BatchRunner(settings.data_dir / "batches", settings.reports_dir, self.lock, self.labeler)
         self.heartbeat = Heartbeat(settings.mqtt_host, settings.mqtt_port, settings.mqtt_user, settings.mqtt_pass,
                                    settings.port, mode_fn=self.mode, public_url=settings.public_url,
-                                   status_fn=lambda: "busy" if self.lock.locked() else "ok",
+                                   status_fn=self.health,
                                    enabled=settings.heartbeat_enabled)
+
+    def health(self) -> str:
+        """ok | degraded (an integration is failing: TAK markers stuck, mesh send failed)."""
+        tak = self.cot.status()
+        if (tak["enabled"] and tak["pending"] and not tak["connected"]) or self.mesh.last_error:
+            return "degraded"
+        return "ok"
 
     def mode(self) -> str:
         if self.settings.simulate:

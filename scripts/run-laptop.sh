@@ -1,27 +1,32 @@
 #!/usr/bin/env bash
-# Run change-detect on a laptop (primary: Apple Silicon Mac; Linux works too).
+# Run change-detect on a Mac station (isr-hq). Reads configuration from the ENVIRONMENT only
+# (the platform's laptop/start-mac.sh sources ~/.config/isr-kit/station.env first).
+# Runs in the foreground on 0.0.0.0:${WEB_PORT:-8130} until SIGTERM/SIGINT, then exits cleanly
+# (publishes a retained "stopped" heartbeat).
 # Usage: scripts/run-laptop.sh [--simulate] [extra changedetect args]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$(pwd)"
-VENV="$REPO/.venv-laptop"
+VENV="${CHANGE_DETECT_VENV:-$REPO/.venv-laptop}"
 
-if [ ! -f laptop.env ]; then
-    cp deploy/laptop.env.example laptop.env
-    echo ">> Created laptop.env: set MQTT_PASS (the isrkit password from the Pi) and re-run if needed."
-fi
-# Load laptop.env, but let variables already set in the shell win
-while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in ''|'#'*) continue ;; esac
-    key="${line%%=*}"; val="${line#*=}"
-    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
-    if [ -z "${!key+x}" ]; then export "$key=$val"; fi
-done < laptop.env
-export CHANGE_DETECT_DATA_DIR="${CHANGE_DETECT_DATA_DIR:-$HOME/change-detect-data}"
+# Mac defaults from the platform contract; anything already in the environment wins.
+export TAK_HOST="${TAK_HOST:-isr-pi.local}"
+export TAK_PORT="${TAK_PORT:-8087}"
+export MQTT_HOST="${MQTT_HOST:-isr-pi.local}"
+export MQTT_PORT="${MQTT_PORT:-1883}"
+export MQTT_USER="${MQTT_USER:-isrkit}"
+export MQTT_PASS="${MQTT_PASS:-}"
+export WEB_PORT="${WEB_PORT:-8130}"
+export VLM_URL="${VLM_URL:-http://localhost:11434}"
+export VLM_MODEL="${VLM_MODEL:-qwen3-vl:8b}"
 export CHANGE_DETECT_PROFILE="${CHANGE_DETECT_PROFILE:-laptop}"
+export CHANGE_DETECT_DATA_DIR="${CHANGE_DETECT_DATA_DIR:-$HOME/change-detect-data}"
+export PYTHONUNBUFFERED=1
+
+log() { echo "[change-detect] $*" >&2; }
 
 if [ ! -x "$VENV/bin/python" ]; then
-    echo ">> Creating $VENV"
+    log "creating $VENV"
     if command -v uv >/dev/null 2>&1; then
         uv venv -q -p 3.12 "$VENV"
     else
@@ -29,13 +34,13 @@ if [ ! -x "$VENV/bin/python" ]; then
         for c in python3.12 python3.11 python3.13 python3; do
             if command -v "$c" >/dev/null 2>&1 && "$c" -c 'import sys; sys.exit(sys.version_info < (3, 11))'; then PY="$c"; break; fi
         done
-        [ -n "$PY" ] || { echo "Need Python 3.11+ (brew install python@3.12, or install uv)"; exit 1; }
+        [ -n "$PY" ] || { log "need Python 3.11+ (brew install python@3.12, or install uv)"; exit 1; }
         "$PY" -m venv "$VENV"
     fi
 fi
 STAMP="$VENV/.deps-$(cat requirements.txt requirements-desktop.txt | shasum | cut -c1-12)"
 if [ ! -f "$STAMP" ]; then
-    echo ">> Installing dependencies (first run downloads PyTorch, ~1 GB)"
+    log "installing dependencies (first run downloads PyTorch, ~1 GB)"
     if command -v uv >/dev/null 2>&1; then
         uv pip install -q -p "$VENV/bin/python" -r requirements-desktop.txt
     else
@@ -45,21 +50,19 @@ if [ ! -f "$STAMP" ]; then
     touch "$STAMP"
 fi
 
-ACCEL=$("$VENV/bin/python" -c 'from changedetect.labeler import detect_accelerator as d; print(d())' 2>/dev/null || echo cpu)
-echo ">> Accelerator: $ACCEL | TAK $TAK_HOST:$TAK_PORT | MQTT $MQTT_USER@$MQTT_HOST:$MQTT_PORT | data $CHANGE_DETECT_DATA_DIR"
-if command -v curl >/dev/null 2>&1 && [ "${VLM_BACKEND:-auto}" != "off" ]; then
-    if curl -fsS -m 2 "${VLM_URL%/}/models" >/dev/null 2>&1; then
-        echo ">> Local VLM endpoint up at $VLM_URL (model ${VLM_MODEL})"
+[ -n "$MQTT_PASS" ] || log "WARNING: MQTT_PASS is empty; heartbeat/mesh to $MQTT_HOST will be refused"
+if [ "${VLM_BACKEND:-auto}" != "off" ] && command -v curl >/dev/null 2>&1; then
+    if curl -fsS -m 2 "${VLM_URL%/}/v1/models" >/dev/null 2>&1; then
+        log "local VLM up at $VLM_URL (model $VLM_MODEL)"
     else
-        echo ">> No local VLM at $VLM_URL: install Ollama and run 'ollama pull ${VLM_MODEL}' for offline AI suggestions"
+        log "no VLM at $VLM_URL: on isr-hq run 'ollama pull $VLM_MODEL' for offline AI suggestions"
     fi
 fi
-if ! "$VENV/bin/python" -c "import socket,sys; socket.gethostbyname(sys.argv[1])" "$MQTT_HOST" 2>/dev/null; then
-    echo ">> WARNING: cannot resolve $MQTT_HOST. Join the Pi hotspot, or set the Pi's IP in laptop.env. Continuing."
-fi
+log "TAK $TAK_HOST:$TAK_PORT | MQTT $MQTT_USER@$MQTT_HOST:$MQTT_PORT | port $WEB_PORT | data $CHANGE_DETECT_DATA_DIR"
 
-CMD=("$VENV/bin/python" -m changedetect --profile "$CHANGE_DETECT_PROFILE" "$@")
+# Keep the Mac awake for as long as this process lives (caffeinate -w follows our PID, which
+# exec hands to Python, so SIGTERM goes straight to Python and caffeinate exits with it).
 if [ "$(uname)" = "Darwin" ] && command -v caffeinate >/dev/null 2>&1; then
-    exec caffeinate -is "${CMD[@]}"   # keep the Mac awake while serving
+    caffeinate -is -w $$ &
 fi
-exec "${CMD[@]}"
+exec "$VENV/bin/python" -m changedetect --host 0.0.0.0 --port "$WEB_PORT" --profile "$CHANGE_DETECT_PROFILE" "$@"
