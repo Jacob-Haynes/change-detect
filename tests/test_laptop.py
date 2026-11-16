@@ -136,7 +136,7 @@ class _FakeOllama(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        self._send({"data": [{"id": "qwen3-vl:8b"}]})
+        self._send({"data": [{"id": "qwen3-vl:8b-instruct"}]})
 
     def do_POST(self):
         req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -149,7 +149,7 @@ def test_vlm_openai_compat_then_off():
     srv = http.server.HTTPServer(("127.0.0.1", port), _FakeOllama)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
-        chain = vlm.AdvisorChain("auto", vlm.OpenAICompatAdvisor(f"http://127.0.0.1:{port}", "qwen3-vl:8b"),
+        chain = vlm.AdvisorChain("auto", vlm.OpenAICompatAdvisor(f"http://127.0.0.1:{port}", "qwen3-vl:8b-instruct"),
                                  GeminiAdvisor(None, "gemini-3.8-flash"))
         assert chain.active() == "openai_compat"
         text, source = chain.describe(b"\xff\xd8before", b"\xff\xd8after", "new object")

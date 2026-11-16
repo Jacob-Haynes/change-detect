@@ -14,7 +14,7 @@ DEFAULT_DATA_DIR = Path("/var/lib/change-detect")
 DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
 DEFAULT_PORT = 8130
 # Ollama vision model on the HQ Mac (Qwen3-VL is in Ollama's vision library). Override with VLM_MODEL.
-DEFAULT_VLM_MODEL = "qwen3-vl:8b"
+DEFAULT_VLM_MODEL = "qwen3-vl:8b-instruct"
 # Bare Ollama base URL (no path); the client appends /v1/... itself.
 DEFAULT_VLM_URL = "http://localhost:11434"
 

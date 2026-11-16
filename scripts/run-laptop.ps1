@@ -8,7 +8,7 @@ $Venv = Join-Path $Repo ".venv-laptop"
 $Py = Join-Path $Venv "Scripts\python.exe"
 
 $defaults = @{ TAK_HOST = "isr-pi.local"; TAK_PORT = "8087"; MQTT_HOST = "isr-pi.local"; MQTT_PORT = "1883";
-               MQTT_USER = "isrkit"; WEB_PORT = "8130"; VLM_URL = "http://localhost:11434"; VLM_MODEL = "qwen3-vl:8b";
+               MQTT_USER = "isrkit"; WEB_PORT = "8130"; VLM_URL = "http://localhost:11434"; VLM_MODEL = "qwen3-vl:8b-instruct";
                CHANGE_DETECT_PROFILE = "laptop"; CHANGE_DETECT_DATA_DIR = (Join-Path $HOME "change-detect-data") }
 foreach ($k in $defaults.Keys) {
     if (-not [Environment]::GetEnvironmentVariable($k, "Process")) { [Environment]::SetEnvironmentVariable($k, $defaults[$k], "Process") }

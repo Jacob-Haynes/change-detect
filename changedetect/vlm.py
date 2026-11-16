@@ -17,6 +17,14 @@ from changedetect.gemini import PROMPT, GeminiAdvisor
 
 logger = logging.getLogger(__name__)
 
+# One line of <= 20 words needs far fewer; the cap keeps a model that starts reasoning from running on.
+MAX_TOKENS = 96
+DEFAULT_TIMEOUT_S = 30.0  # qwen3-vl:8b-instruct answers in 1-5 s; fail over to the next backend quickly
+
+
+def _with_tag(model: str) -> str:
+    return model if ":" in model else model + ":latest"
+
 
 def base_url(url: str) -> str:
     """Normalise to the bare Ollama base URL (tolerates a trailing / or /v1)."""
@@ -29,7 +37,7 @@ def base_url(url: str) -> str:
 class OpenAICompatAdvisor:
     name = "openai_compat"
 
-    def __init__(self, url: str, model: str, api_key: str | None = None, timeout: float = 90.0):
+    def __init__(self, url: str, model: str, api_key: str | None = None, timeout: float = DEFAULT_TIMEOUT_S):
         self.url = base_url(url)
         self.model, self.api_key, self.timeout = model, api_key, timeout
         self.last_error: str | None = None
@@ -51,7 +59,8 @@ class OpenAICompatAdvisor:
             return ok
         try:
             models = [m.get("id") for m in self._req("/v1/models").get("data", [])]
-            ok = self.model in models or any(m and m.split(":")[0] == self.model.split(":")[0] for m in models)
+            # exact tag match: qwen3-vl:8b (a thinking build) must not stand in for qwen3-vl:8b-instruct
+            ok = _with_tag(self.model) in {_with_tag(m) for m in models if m}
             self.last_error = None if ok else f"model {self.model} not pulled (ollama pull {self.model})"
         except Exception as e:
             ok = False
@@ -62,24 +71,37 @@ class OpenAICompatAdvisor:
     def describe(self, before_jpg: bytes, after_jpg: bytes, hint: str = "") -> str | None:
         def img(b):
             return {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(b).decode()}}
-        body = {"model": self.model, "temperature": 0.2, "max_tokens": 200,
+        # Plain text out: no Ollama "format":"json" / response_format (MLX-runner models answer HTTP 501).
+        body = {"model": self.model, "temperature": 0.2, "max_tokens": MAX_TOKENS, "stream": False,
                 "messages": [{"role": "user", "content": [
                     {"type": "text", "text": PROMPT + (f" Detector's own guess: {hint}." if hint else "")},
                     img(before_jpg), img(after_jpg)]}]}
         try:
             out = self._req("/v1/chat/completions", body, timeout=self.timeout)
-            text = (out["choices"][0]["message"].get("content") or "").strip()
-            # reasoning models may wrap their thinking; keep the last non-empty line
-            if "</think>" in text:
-                text = text.split("</think>")[-1].strip()
-            lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-            self.last_error = None
-            return lines[-1][:200] if lines else None
         except Exception as e:
             self.last_error = f"VLM request failed: {e}"
             logger.warning(self.last_error)
             self._reach = (time.time(), False)
             return None
+        try:
+            choice = out["choices"][0]
+            text = (choice["message"].get("content") or "").strip()
+        except (KeyError, IndexError, TypeError, AttributeError):
+            choice, text = {}, ""
+        # thinking builds may wrap their reasoning; keep what follows it
+        if "</think>" in text:
+            text = text.split("</think>")[-1].strip()
+        elif text.startswith("<think>"):
+            text = ""  # cut off mid-thought by the token cap
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        if not lines:  # empty content is a failure, so the chain falls back to the next backend
+            why = choice.get("finish_reason") if isinstance(choice, dict) else None
+            self.last_error = (f"VLM {self.model} returned empty content" + (f" (finish_reason {why})" if why else "")
+                               + "; use an instruct build such as qwen3-vl:8b-instruct")
+            logger.warning(self.last_error)
+            return None
+        self.last_error = None
+        return lines[-1][:200]
 
 
 class AdvisorChain:

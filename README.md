@@ -42,7 +42,7 @@ Raspberry Pi 5 CPU (OpenCV, no AI accelerator) with a web UI on **port 8130**.
    `/var/lib/change-detect/reports/<id>/` (with the original files and `result.json`).
 7. **Optional AI suggestion:** sends the two aligned crops of each change to a vision model and
    shows a one-line description labelled "AI suggestion (source)". `VLM_BACKEND=auto` tries a local
-   OpenAI-compatible endpoint first (Ollama on the HQ Mac, `qwen3-vl:8b`, offline), then Gemini
+   OpenAI-compatible endpoint first (Ollama on the HQ Mac, `qwen3-vl:8b-instruct`, offline), then Gemini
    if `GEMINI_API_KEY` is set, otherwise off. `openai_compat`, `gemini` or `off` forces one backend.
 8. **Optional ATAK**: pushes a CoT "change detected" marker (`a-u-G`, unknown ground) with the
    summary. The position is a manually entered lat/lon, else EXIF GPS, else the OP position
@@ -100,7 +100,7 @@ belong to the pi-platform repo, not this one.
 | `TAK_HOST` / `TAK_PORT` | `127.0.0.1` / `8087` | CoT TCP output: one long-lived, registered connection (see below). If the TAK server is down, markers queue and it reconnects with backoff. |
 | `MQTT_HOST` / `MQTT_PORT` / `MQTT_USER` / `MQTT_PASS` | `127.0.0.1` / `1883` / `guest` / `guest` | Publishes to `meshbus/tx`. It never opens the radio itself. |
 | `VLM_BACKEND` | `auto` | `auto` (local VLM → Gemini → off), `openai_compat`, `gemini` or `off`. |
-| `VLM_URL` / `VLM_MODEL` | `http://localhost:11434` / `qwen3-vl:8b` | **Bare** Ollama base URL, with no path (the tool appends `/v1/chat/completions`). On the Pi, set `http://isr-hq.local:11434`. |
+| `VLM_URL` / `VLM_MODEL` | `http://localhost:11434` / `qwen3-vl:8b-instruct` | **Bare** Ollama base URL, with no path (the tool appends `/v1/chat/completions`). On the Pi, set `http://isr-hq.local:11434`. |
 | `GEMINI_API_KEY` | empty | Empty means no cloud. Set it to allow Gemini suggestions. |
 | `GEMINI_MODEL` | `gemini-3.8-flash` | Any current Gemini model that accepts images. |
 | `YOLO_BACKEND` | `auto` | `auto` uses ultralytics (PyTorch) if installed (laptop), else ONNX via OpenCV (Pi). `off` disables YOLO. |
@@ -157,7 +157,7 @@ runs Ollama) as the analysis station. The Mac joins the Pi's hotspot.
 
 Defaults when a variable is unset: `TAK_HOST=isr-pi.local`, `TAK_PORT=8087`,
 `MQTT_HOST=isr-pi.local`, `MQTT_PORT=1883`, `MQTT_USER=isrkit`, `MQTT_PASS` (it must be set),
-`VLM_URL=http://localhost:11434`, `VLM_MODEL=qwen3-vl:8b`, `CHANGE_DETECT_PROFILE=laptop`.
+`VLM_URL=http://localhost:11434`, `VLM_MODEL=qwen3-vl:8b-instruct`, `CHANGE_DETECT_PROFILE=laptop`.
 
 ```bash
 git clone <this repo> && cd change-detect
@@ -175,8 +175,12 @@ open http://isr-hq.local:8130/
   - Offline with no weights at all, the UI says "YOLO: model missing" and labels are off; it does not hang.
   - Online with weights missing, it downloads them in the background.
 - **Offline AI suggestions:** install [Ollama](https://ollama.com) on the HQ Mac and run
-  `ollama pull qwen3-vl:8b` (about 6 GB). Leave `VLM_BACKEND=auto`: suggestions then
-  stay on the Mac, and the UI shows "local VLM (qwen3-vl:8b)". If Ollama isn't running and
+  `ollama pull qwen3-vl:8b-instruct` (about 6 GB).
+  Use the **instruct** build. Plain `qwen3-vl:8b` is a thinking build: it reasons even when told
+  not to and sometimes returns empty text. An empty answer counts as a failure and falls back to
+  the next backend. Replies are capped at 96 tokens and requested as plain text: no JSON
+  `format`, which MLX-runner models reject with HTTP 501. Leave `VLM_BACKEND=auto`: suggestions then
+  stay on the Mac, and the UI shows "local VLM (qwen3-vl:8b-instruct)". If Ollama isn't running and
   `GEMINI_API_KEY` is set, it falls back to Gemini cloud.
 - **Pi address.** If mDNS fails on the hotspot, set `TAK_HOST` and `MQTT_HOST` to 192.168.4.1.
 - **MQTT from the laptop** must use the `isrkit` user, because RabbitMQ's `guest` account only
