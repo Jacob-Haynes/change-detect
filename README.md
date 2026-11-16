@@ -62,6 +62,9 @@ Raspberry Pi 5 CPU (OpenCV, no AI accelerator) with a web UI on **port 8130**.
        point that ATAK never draws.
      - The uid and callsign are stable, so a restart takes back the same identity. OpenTAKServer
        silently refuses a callsign another uid already holds.
+     - Change markers are built so OpenTAKServer also stores them and shows them on its web map.
+       They have type `a-u-G`, no `<takv>`, no contact endpoint, a real position (never 0,0), and
+       a single `<link>` to the registration uid.
 
 The header always shows which modes are active: `SIMULATE`, profile and accelerator
 (`PI · CPU · 1600px`, `LAPTOP · MPS · full-res`), the AI suggestion source (local VLM, Gemini

@@ -277,7 +277,8 @@ def create_app(settings: Settings) -> FastAPI:
                   f"{source}; camera position, not the change itself]"
         if result.get("synthetic"):
             remarks = "SIMULATED: " + remarks
-        xml = cot.build_change_cot(uid, lat, lon, callsign, remarks, manual=manual)
+        xml = cot.build_change_cot(uid, lat, lon, callsign, remarks, manual=manual,
+                                   parent_uid=svc.cot.uid, parent_callsign=svc.cot.callsign)
         state = svc.cot.send(xml, uid=uid)
         if state == "rate_limited":
             raise HTTPException(429, "marker for this result was just sent; wait a few seconds")

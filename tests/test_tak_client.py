@@ -4,6 +4,10 @@
 2. A connection is bound only if its first <contact endpoint=...> event arrives after the async
    channel opens (`channel_delay` after connect); an earlier one is ignored, so the connection stays unbound.
 3. A registration whose callsign is already held by a different uid is silently refused.
+
+It also applies OTS's marker-storage rules (C5.5): a relayed event is STORED only if its type
+matches ^a-[fhupansjk]-[ZPAGSUF] or ^b-m-p (not b-m-p-s-p-loc), it has no <takv> and no
+<contact endpoint>, its position is real (not 0,0), and every <link uid> is a registered EUD.
 """
 
 import re
@@ -18,6 +22,7 @@ from changedetect import tak_client
 from changedetect.tak_client import TakClient, build_registration_sa
 
 EVENT_RE = re.compile(rb"<event\b.*?</event>", re.S)
+STORABLE_TYPE = re.compile(r"^(a-[fhupansjk]-[ZPAGSUF]|b-m-p)")
 
 
 class FakeOTS:
@@ -30,6 +35,7 @@ class FakeOTS:
         self.port = self.srv.getsockname()[1]
         self.euds: dict[str, str] = {}  # uid -> callsign
         self.delivered: list[ET.Element] = []
+        self.stored: list[ET.Element] = []
         self.dropped: list[str] = []
         self.registrations: list[tuple[int, float, ET.Element]] = []  # (conn no, seconds after connect, event)
         self.refused: list[str] = []
@@ -82,6 +88,22 @@ class FakeOTS:
                         self.dropped.append(ev.get("uid"))  # rule 1: not a registered EUD
                     else:
                         self.delivered.append(ev)
+                        if self.storable(ev):
+                            self.stored.append(ev)
+
+    def storable(self, ev: ET.Element) -> bool:
+        t = ev.get("type") or ""
+        if not STORABLE_TYPE.match(t) or t.startswith("b-m-p-s-p-loc"):
+            return False
+        if ev.find("detail/takv") is not None:
+            return False
+        c = ev.find("detail/contact")
+        if c is not None and c.get("endpoint"):
+            return False
+        p = ev.find("point")
+        if p is None or (float(p.get("lat", 0)) == 0 and float(p.get("lon", 0)) == 0):
+            return False
+        return all(link.get("uid") in self.euds for link in ev.findall("detail/link"))
 
     def drop_all(self):
         with self._lock:
@@ -281,3 +303,49 @@ def test_web_app_connects_at_startup_and_marker_reaches_ots(ots, tmp_path, monke
         assert web.get("/api/status").json()["tak"]["registered"] is True
     finally:
         svc.cot.stop()
+
+
+# ------------------------------------------------------------------ C5.5 markers OTS stores
+def _ev(xml):
+    return ET.fromstring(xml.split("?>", 1)[-1])
+
+
+def test_fake_ots_storage_rules(ots):
+    from changedetect import cot
+    ots.euds["isrkit-change-detect-isr-hq"] = "CHANGE isr-hq"
+    good = cot.build_change_cot("CHANGE-1", 51.4779, -0.0015, "CHANGE 1", "r",
+                                parent_uid="isrkit-change-detect-isr-hq", parent_callsign="CHANGE isr-hq")
+    assert ots.storable(_ev(good))
+    assert not ots.storable(_ev(build_registration_sa("isr-hq", (51.4, -0.1), "1")))  # takv + endpoint
+    assert not ots.storable(_ev(good.replace('type="a-u-G"', 'type="b-m-p-s-p-loc"')))
+    assert not ots.storable(_ev(good.replace('type="a-u-G"', 'type="t-x-c"')))
+    assert not ots.storable(_ev(good.replace('uid="isrkit-change-detect-isr-hq"', 'uid="CHANGE-0"')))
+    assert not ots.storable(_ev(good.replace('lat="51.4779000" lon="-0.0015000"', 'lat="0" lon="0"')))
+    with pytest.raises(ValueError):
+        cot.build_change_cot("CHANGE-2", 0, 0, "x", "r")
+
+
+def test_change_marker_from_web_app_is_stored(ots, tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from changedetect.config import Settings
+    from changedetect.web.app import create_app
+    monkeypatch.setenv("ISR_HOST", "isr-hq")
+    st = Settings(data_dir=tmp_path, simulate=True, tak_port=ots.port, mqtt_port=1, yolo_backend="off",
+                  vlm_backend="off", heartbeat_enabled=False)
+    app = create_app(st)
+    try:
+        web = TestClient(app)
+        rid = web.post("/api/analyze", data={"sample": "synthetic"}).json()["id"]
+        assert web.post(f"/api/results/{rid}/cot", json={}).status_code == 200
+        manual = web.post("/api/analyze", data={"sample": "synthetic"}).json()["id"]
+        assert web.post(f"/api/results/{manual}/cot", json={"lat": 51.5007, "lon": -0.1246}).status_code == 200
+        assert _until(lambda: len(ots.delivered) == 2, timeout=8)
+        assert len(ots.stored) == 2, [ET.tostring(e) for e in ots.delivered]
+        for ev in ots.stored:
+            assert ev.get("type") == "a-u-G" and ev.find("detail/takv") is None
+            assert ev.find("detail/contact").get("endpoint") is None
+            (link,) = ev.findall("detail/link")
+            assert link.get("uid") == "isrkit-change-detect-isr-hq" and link.get("relation") == "p-p"
+    finally:
+        app.state.svc.cot.stop()
