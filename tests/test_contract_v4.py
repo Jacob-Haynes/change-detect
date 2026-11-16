@@ -11,7 +11,7 @@ import cv2
 import pytest
 from fastapi.testclient import TestClient
 
-from changedetect import cot, heartbeat, labeler, mesh, prefetch
+from changedetect import heartbeat, labeler, mesh, prefetch, tak_client
 from changedetect.config import Settings, parse_position
 from changedetect.web.app import create_app
 
@@ -62,8 +62,8 @@ def test_sensor_position_from_env(monkeypatch, tmp_path):
 # ---------------------------------------------------------------- C4.4 rate limits
 def test_cot_limited_per_uid(monkeypatch):
     clock = [1000.0]
-    monkeypatch.setattr(cot.time, "monotonic", lambda: clock[0])
-    s = cot.CotSender("127.0.0.1", _free_port())
+    monkeypatch.setattr(tak_client.time, "monotonic", lambda: clock[0])
+    s = tak_client.TakClient("127.0.0.1", _free_port(), "isr-hq")
     monkeypatch.setattr(s, "start", lambda: None)  # no network thread needed
     assert s.send("<a/>", uid="CHANGE-1") == "queued"
     assert s.send("<a/>", uid="CHANGE-1") == "rate_limited"

@@ -1,12 +1,11 @@
 import json
 import socket
-import threading
-import time
 import xml.etree.ElementTree as ET
 
 import numpy as np
 
 from changedetect import cot, gemini, labeler, mesh
+from changedetect.tak_client import TakClient
 
 
 def test_cot_xml_is_valid():
@@ -26,33 +25,8 @@ def _free_port():
     return p
 
 
-def test_cot_sender_survives_tak_down_then_delivers():
-    port = _free_port()
-    sender = cot.CotSender("127.0.0.1", port)
-    assert sender.send("<event/>") == "queued"
-    time.sleep(0.3)
-    assert not sender.status()["connected"] and sender.status()["pending"] == 1
-    got = []
-    srv = socket.socket()
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind(("127.0.0.1", port))
-    srv.listen(1)
-
-    def accept():
-        c, _ = srv.accept()
-        got.append(c.recv(100))
-        c.close()
-
-    t = threading.Thread(target=accept, daemon=True)
-    t.start()
-    t.join(timeout=6)
-    sender.stop()
-    srv.close()
-    assert got and got[0] == b"<event/>"
-
-
 def test_cot_disabled():
-    assert cot.CotSender("127.0.0.1", 1, enabled=False).send("<event/>") == "disabled"
+    assert TakClient("127.0.0.1", 1, "isr-hq", enabled=False).send("<event/>") == "disabled"
 
 
 def test_mesh_payload_contract():

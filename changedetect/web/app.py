@@ -19,10 +19,11 @@ from pydantic import BaseModel
 from changedetect import __version__, batch, cot, media, pipeline, synthetic
 from changedetect.config import Settings
 from changedetect.gemini import GeminiAdvisor
-from changedetect.heartbeat import Heartbeat
+from changedetect.heartbeat import Heartbeat, short_hostname
 from changedetect.labeler import detect_accelerator, make_labeler
 from changedetect.config import parse_position
 from changedetect.mesh import MeshBus, label_simulated
+from changedetect.tak_client import TakClient
 from changedetect.vlm import AdvisorChain, OpenAICompatAdvisor
 
 logger = logging.getLogger(__name__)
@@ -51,7 +52,9 @@ class Services:
                                     OpenAICompatAdvisor(settings.vlm_url, settings.vlm_model, settings.vlm_api_key),
                                     self.gemini)
         self.accelerator = getattr(self.labeler, "device", None) or detect_accelerator()
-        self.cot = cot.CotSender(settings.tak_host, settings.tak_port, settings.cot_enabled)
+        # C5.1: one long-lived, registered connection to OpenTAKServer, opened at startup
+        self.cot = TakClient(settings.tak_host, settings.tak_port, short_hostname(), settings.sensor_position,
+                             __version__, settings.cot_enabled)
         self.mesh = MeshBus(settings.mqtt_host, settings.mqtt_port, settings.mqtt_user,
                             settings.mqtt_pass, settings.mesh_enabled)
         self.lock = threading.Lock()  # one analysis at a time (CPU-bound on the Pi)
@@ -86,6 +89,7 @@ def create_app(settings: Settings) -> FastAPI:
     svc.heartbeat.start()
     app = FastAPI(title="Change Detect", version=__version__)
     app.state.svc = svc
+    svc.cot.start()
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     app.mount("/results", StaticFiles(directory=str(settings.reports_dir)), name="results")
 

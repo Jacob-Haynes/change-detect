@@ -52,6 +52,16 @@ Raspberry Pi 5 CPU (OpenCV, no AI accelerator) with a web UI on **port 8130**.
      mesh texts start `[SIM] `. Your own imagery carries no prefix.
    - Rate limits: at most one mesh text every 30 s, and one CoT event per marker uid every 5 s.
      The UI says when to try again.
+   - **TAK connection.** OpenTAKServer drops CoT from senders that are not a registered device.
+     So change-detect keeps one TCP connection open from startup and reconnects with backoff.
+     After each connect it waits 3 s, then registers. Markers go out on that connection once
+     registration is done; until then they queue.
+     - It registers with a position report: uid `isrkit-change-detect-<ISR_HOST>`, callsign
+       `CHANGE <ISR_HOST>`, type `a-f-G-E-S`, group Cyan. The report is re-sent every 60 s.
+     - The report uses `SENSOR_LAT`/`SENSOR_LON`. If those are unset, it uses a "no position"
+       point that ATAK never draws.
+     - The uid and callsign are stable, so a restart takes back the same identity. OpenTAKServer
+       silently refuses a callsign another uid already holds.
 
 The header always shows which modes are active: `SIMULATE`, profile and accelerator
 (`PI · CPU · 1600px`, `LAPTOP · MPS · full-res`), the AI suggestion source (local VLM, Gemini
@@ -87,7 +97,7 @@ belong to the pi-platform repo, not this one.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `TAK_HOST` / `TAK_PORT` | `127.0.0.1` / `8087` | CoT TCP output. If the TAK server is down, markers queue and retry with backoff. |
+| `TAK_HOST` / `TAK_PORT` | `127.0.0.1` / `8087` | CoT TCP output: one long-lived, registered connection (see below). If the TAK server is down, markers queue and it reconnects with backoff. |
 | `MQTT_HOST` / `MQTT_PORT` / `MQTT_USER` / `MQTT_PASS` | `127.0.0.1` / `1883` / `guest` / `guest` | Publishes to `meshbus/tx`. It never opens the radio itself. |
 | `VLM_BACKEND` | `auto` | `auto` (local VLM → Gemini → off), `openai_compat`, `gemini` or `off`. |
 | `VLM_URL` / `VLM_MODEL` | `http://localhost:11434` / `qwen3-vl:8b` | **Bare** Ollama base URL, with no path (the tool appends `/v1/chat/completions`). On the Pi, set `http://isr-hq.local:11434`. |
