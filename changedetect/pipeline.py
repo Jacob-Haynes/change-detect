@@ -28,7 +28,8 @@ class Options:
     min_area: int = 300
     mode360: str = "auto"  # auto | on | off
     use_yolo: bool = True
-    max_dim: int = 1600
+    max_dim: int | None = 1600       # flat stills/frames; None = full resolution (laptop)
+    max_dim_360: int | None = 4096   # equirectangular panoramas; None = full resolution
     before_time_s: float | None = None
     after_time_s: float | None = None
     pitch_360: float = -15.0
@@ -39,14 +40,20 @@ def new_id() -> str:
     return datetime.now().strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(2)
 
 
+def _load_dim(opts: Options) -> int | None:
+    if opts.max_dim is None or opts.max_dim_360 is None:
+        return None
+    return max(opts.max_dim, opts.max_dim_360)
+
+
 def _load(path: Path, opts: Options, when: float | None):
     kind = media.kind_of(path)
     if kind == "image":
         meta = media.read_exif(path)
-        return kind, meta, [(None, media.load_image(path, max(opts.max_dim, 4096)))]
+        return kind, meta, [(None, media.load_image(path, _load_dim(opts)))]
     meta = media.MediaMeta(name=path.name, kind="video")
     frames = media.sample_video(path, n=5 if when is not None else 12,
-                                max_dim=max(opts.max_dim, 4096), around_s=when)
+                                max_dim=_load_dim(opts), around_s=when)
     meta.height, meta.width = frames[0][1].shape[:2]
     return kind, meta, frames
 
@@ -94,16 +101,18 @@ def analyze(before_path: Path, after_path: Path, out_root: Path, opts: Options |
     pairs: list[tuple[str, np.ndarray, np.ndarray]] = []
     yaw_offset = None
     if is360:
-        eb = media.resize_max(img_b, 4096)
-        ea = media.resize_max(img_a, 4096)
+        eb = media.resize_max(img_b, opts.max_dim_360)
+        ea = media.resize_max(img_a, opts.max_dim_360)
         if ea.shape != eb.shape:
             import cv2
             ea = cv2.resize(ea, (eb.shape[1], eb.shape[0]), interpolation=cv2.INTER_AREA)
         yaw, conf = media.estimate_yaw_offset(eb, ea)
         yaw_offset = {"deg": round(yaw, 1), "confidence": round(conf, 3)}
+        out_w = int(np.clip(eb.shape[1] // 4, 960, 2048))
+        out_h = out_w * 3 // 4
         for name, base_yaw in VIEWS_360:
-            pb = media.equirect_to_perspective(eb, base_yaw, opts.pitch_360, opts.fov_360)
-            pa = media.equirect_to_perspective(ea, base_yaw + yaw, opts.pitch_360, opts.fov_360)
+            pb = media.equirect_to_perspective(eb, base_yaw, opts.pitch_360, opts.fov_360, out_w, out_h)
+            pa = media.equirect_to_perspective(ea, base_yaw + yaw, opts.pitch_360, opts.fov_360, out_w, out_h)
             pairs.append((name, pb, pa))
     else:
         pairs.append(("main", media.resize_max(img_b, opts.max_dim), media.resize_max(img_a, opts.max_dim)))

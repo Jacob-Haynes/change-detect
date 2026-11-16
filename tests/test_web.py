@@ -21,7 +21,7 @@ def _free_port():
 def client(tmp_path_factory):
     d = tmp_path_factory.mktemp("data")
     st = Settings(data_dir=d, simulate=True, tak_port=_free_port(), mqtt_port=_free_port(),
-                  yolo_model=d / "models" / "none.onnx")
+                  yolo_model=d / "models" / "none.onnx", yolo_backend="opencv", vlm_backend="off")
     return TestClient(create_app(st))
 
 
@@ -29,6 +29,7 @@ def test_index_and_status(client):
     assert "CHANGE DETECT" in client.get("/").text
     s = client.get("/api/status").json()
     assert s["simulate"] and not s["gemini"]["enabled"] and not s["yolo"]["enabled"]
+    assert s["mode"] == "simulate" and s["ai"]["active"] == "off" and s["profile"] == "pi"
 
 
 def test_sample_analysis_and_actions(client):
@@ -72,3 +73,34 @@ def test_bad_inputs(client):
     assert r.status_code == 400
     assert client.get("/api/results/../../etc").status_code == 404
     assert client.get("/api/results/nope-nope").status_code == 404
+
+
+def test_batch_two_folders(client, flat_pair):
+    import time
+    from changedetect import synthetic
+    before, after, _ = flat_pair
+    b2, a2, _ = synthetic.make_pair(seed=21)
+    enc = lambda im: io.BytesIO(cv2.imencode(".jpg", im)[1].tobytes())
+    files = [("before_files", ("GOPR0001.JPG", enc(before), "image/jpeg")),
+             ("before_files", ("GOPR0002.JPG", enc(b2), "image/jpeg")),
+             ("before_files", ("GOPR0003.LRV", io.BytesIO(b"x"), "video/mp4")),  # sidecar: skipped
+             ("after_files", ("GOPR0101.JPG", enc(a2), "image/jpeg")),
+             ("after_files", ("GOPR0102.JPG", enc(after), "image/jpeg"))]
+    r = client.post("/api/batch", files=files, data={"use_yolo": "false"})
+    assert r.status_code == 200, r.text
+    bid = r.json()["id"]
+    for _ in range(120):
+        j = client.get(f"/api/batch/{bid}").json()
+        if j["state"] in ("done", "error"):
+            break
+        time.sleep(0.5)
+    assert j["state"] == "done", j
+    pairs = {p["before"]: p["after"] for p in j["pairs"]}
+    assert pairs == {"GOPR0001.JPG": "GOPR0102.JPG", "GOPR0002.JPG": "GOPR0101.JPG"}
+    assert all(p["alignment_ok"] and p["changes"] >= 3 for p in j["pairs"])
+    assert client.get(f"/api/results/{j['pairs'][0]['result_id']}").status_code == 200
+    assert client.get("/api/batches").json()[0]["id"] == bid
+
+
+def test_batch_needs_files(client):
+    assert client.post("/api/batch", data={}).status_code == 400

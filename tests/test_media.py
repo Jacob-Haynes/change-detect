@@ -82,3 +82,20 @@ def test_video_best_matching_frames(flat_pair, tmp_path):
     assert 0.8 <= r["video"]["after_time_s"] <= 1.4
     assert r["inputs"]["before"]["kind"] == "video"
     assert r["alignment_ok"] and r["changes_total"] >= 3
+
+
+@pytest.mark.parametrize("fourcc", ["hvc1", "avc1"])
+def test_dji_style_mp4_decodes(tmp_path, fourcc):
+    """DJI O3/O4 onboard recordings are H.264/H.265 MP4 with no GPS."""
+    p = tmp_path / f"DJI_0001_{fourcc}.MP4"
+    vw = cv2.VideoWriter(str(p), cv2.VideoWriter_fourcc(*fourcc), 30, (1280, 720))
+    if not vw.isOpened():
+        pytest.skip(f"no {fourcc} encoder in this OpenCV build")
+    f = np.zeros((720, 1280, 3), np.uint8)
+    for i in range(20):
+        f[:] = i * 10
+        vw.write(f)
+    vw.release()
+    frames = media.sample_video(p, n=4, max_dim=None)
+    assert len(frames) >= 3 and frames[0][1].shape == (720, 1280, 3)
+    assert media.kind_of(p) == "video"

@@ -121,6 +121,8 @@ def detect_changes(before: np.ndarray, after_aligned: np.ndarray, valid: np.ndar
     h, w = before.shape[:2]
     scale = max(h, w) / 1280.0
     warnings: list[str] = []
+    # min_area is specified at ~1600 px width; scale it to the real resolution
+    min_area = int(min_area * (max(h, w) / 1600.0) ** 2) if max(h, w) > 1600 else min_area
     # Ignore the ragged edge of the warped image
     erode_px = max(3, int(round(6 * scale)))
     valid_e = cv2.erode(valid.astype(np.uint8), np.ones((erode_px * 2 + 1,) * 2, np.uint8)) > 0
@@ -132,7 +134,7 @@ def detect_changes(before: np.ndarray, after_aligned: np.ndarray, valid: np.ndar
     lab_b = cv2.cvtColor(bb, cv2.COLOR_BGR2LAB)
     lab_a = cv2.cvtColor(ab, cv2.COLOR_BGR2LAB)
 
-    r = max(1, int(round(2 * scale)))
+    r = min(3, max(1, int(round(2 * scale))))
     d_l = _shift_min_absdiff(lab_b[..., 0], lab_a[..., 0], r)
     d_c = _shift_min_absdiff(lab_b[..., 1:], lab_a[..., 1:], r)
     ssim_d = 1.0 - _ssim_map(cv2.GaussianBlur(lab_b[..., 0], (0, 0), 1.0),

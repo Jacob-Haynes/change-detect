@@ -14,6 +14,8 @@ Environment=CHANGE_DETECT_DATA_DIR=/var/lib/change-detect
 ExecStart=/opt/change-detect/deploy/start.sh
 Restart=on-failure
 RestartSec=5
+TimeoutStopSec=15
+KillSignal=SIGTERM
 # Analysis is CPU-heavy; keep it below the radio bridge and TAK server
 Nice=5
 NoNewPrivileges=true

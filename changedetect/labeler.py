@@ -7,6 +7,7 @@ Drop an ONNX export of a YOLOv8/YOLO11 nano model at /var/lib/change-detect/mode
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -86,6 +87,8 @@ class Labeler:
         else:
             self.error = "no model file"
 
+    device = "cpu"
+
     @property
     def enabled(self) -> bool:
         return self.net is not None
@@ -127,3 +130,89 @@ def describe(box, before_dets: list[Detection], after_dets: list[Detection]) -> 
             phrases.append(f"{g} moved/changed")
     labels = [f"before:{d.cls} {d.conf:.2f}" for d in b] + [f"after:{d.cls} {d.conf:.2f}" for d in a]
     return labels, ", ".join(phrases) or None
+
+
+# ---------------------------------------------------------------- laptop path (PyTorch / ultralytics)
+
+
+def detect_accelerator() -> str:
+    """cuda > mps > cpu. Only imports torch if it is installed (it is not on the Pi)."""
+    try:
+        import torch
+    except Exception:
+        return "cpu"
+    try:
+        if torch.cuda.is_available():
+            return "cuda"
+        mps = getattr(torch.backends, "mps", None)
+        if mps is not None and mps.is_available():
+            return "mps"
+    except Exception:
+        pass
+    return "cpu"
+
+
+def default_weights(device: str) -> str:
+    # bigger model when a GPU is present; nano on CPU
+    return "yolo11m.pt" if device in ("cuda", "mps") else "yolo11n.pt"
+
+
+class UltralyticsLabeler:
+    """YOLO11 via ultralytics on CUDA/MPS/CPU. Loads in the background so startup is instant."""
+
+    def __init__(self, models_dir: Path, weights: str | None = None, device: str | None = None):
+        self.device = device or detect_accelerator()
+        self.weights = weights or default_weights(self.device)
+        self.model_path = Path(self.weights) if Path(self.weights).is_absolute() else Path(models_dir) / self.weights
+        self.model = None
+        self.error: str | None = "loading"
+        self.imgsz = 1280 if self.device in ("cuda", "mps") else 640
+        threading.Thread(target=self._load, name="yolo-load", daemon=True).start()
+
+    def _load(self):
+        try:
+            from ultralytics import YOLO
+            self.model_path.parent.mkdir(parents=True, exist_ok=True)
+            # downloads the weights into models/ on first run (needs internet once)
+            self.model = YOLO(str(self.model_path))
+            self.model.to(self.device)
+            self.error = None
+            logger.info("YOLO %s loaded on %s", self.model_path.name, self.device)
+        except Exception as e:
+            self.error = f"could not load {self.weights} ({e})"
+            logger.warning("YOLO disabled: %s", self.error)
+
+    @property
+    def enabled(self) -> bool:
+        return self.model is not None
+
+    def detect(self, img: np.ndarray) -> list[Detection]:
+        if self.model is None:
+            return []
+        res = self.model.predict(img, device=self.device, imgsz=self.imgsz, conf=0.35, verbose=False)[0]
+        dets = []
+        names = res.names
+        for (x0, y0, x1, y1), c, k in zip(res.boxes.xyxy.tolist(), res.boxes.conf.tolist(), res.boxes.cls.tolist()):
+            name = names.get(int(k), str(int(k))) if isinstance(names, dict) else COCO[int(k)]
+            dets.append(Detection(group=GROUPS.get(name, name), cls=name, conf=round(float(c), 2),
+                                  box=(int(x0), int(y0), int(x1 - x0), int(y1 - y0))))
+        return dets
+
+
+def make_labeler(backend: str, onnx_path: Path | None, models_dir: Path, weights: str | None = None):
+    """auto: ultralytics if installed (laptop), else the OpenCV-DNN ONNX model (Pi), else off."""
+    backend = (backend or "auto").lower()
+    if backend == "off":
+        lab = Labeler(None)
+        lab.error = "disabled (YOLO_BACKEND=off)"
+        return lab
+    if backend in ("auto", "ultralytics"):
+        try:
+            import ultralytics  # noqa: F401
+            return UltralyticsLabeler(models_dir, weights)
+        except Exception as e:
+            if backend == "ultralytics":
+                lab = Labeler(None)
+                lab.error = f"ultralytics not installed ({e})"
+                return lab
+    return Labeler(onnx_path)

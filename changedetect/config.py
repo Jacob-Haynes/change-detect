@@ -13,6 +13,16 @@ DEFAULT_DATA_DIR = Path("/var/lib/change-detect")
 # Current stable Gemini Flash model per Google's model list (Nov 2026). Override with GEMINI_MODEL.
 DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
 DEFAULT_PORT = 8130
+# Ollama vision model on the HQ Mac (Qwen3-VL is in Ollama's vision library). Override with VLM_MODEL.
+DEFAULT_VLM_MODEL = "qwen3-vl:8b"
+DEFAULT_VLM_URL = "http://localhost:11434/v1"
+
+# Processing resolution per deployment profile: the Pi downscales for speed, the laptop keeps
+# full-resolution stills (alignment itself always runs on a <=2000 px copy).
+PROFILES = {
+    "pi": {"max_dim": 1600, "max_dim_360": 4096, "batch_max_files": 120},
+    "laptop": {"max_dim": None, "max_dim_360": None, "batch_max_files": 600},
+}
 
 
 def _env(name: str, default: str | None = None) -> str | None:
@@ -42,10 +52,21 @@ class Settings:
     gemini_api_key: str | None = None
     gemini_model: str = DEFAULT_GEMINI_MODEL
     yolo_model: Path | None = None
+    yolo_backend: str = "auto"  # auto | ultralytics | opencv | off
+    yolo_weights: str | None = None
+    vlm_backend: str = "auto"  # auto (openai_compat -> gemini -> off) | openai_compat | gemini | off
+    vlm_url: str = DEFAULT_VLM_URL
+    vlm_model: str = DEFAULT_VLM_MODEL
+    vlm_api_key: str | None = None
+    profile: str = "pi"
+    port: int = DEFAULT_PORT
+    public_url: str | None = None
+    heartbeat_enabled: bool = True
     max_upload_mb: int = 1024
 
     @classmethod
-    def from_env(cls, data_dir: str | Path | None = None, simulate: bool = False) -> "Settings":
+    def from_env(cls, data_dir: str | Path | None = None, simulate: bool = False,
+                 profile: str | None = None) -> "Settings":
         chosen = Path(data_dir or _env("CHANGE_DETECT_DATA_DIR") or DEFAULT_DATA_DIR)
         if not _writable(chosen):
             fallback = Path.cwd() / "data"
@@ -67,8 +88,22 @@ class Settings:
             gemini_api_key=_env("GEMINI_API_KEY"),
             gemini_model=_env("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
             yolo_model=yolo_path,
+            yolo_backend=_env("YOLO_BACKEND", "auto"),
+            yolo_weights=_env("YOLO_WEIGHTS"),
+            vlm_backend=_env("VLM_BACKEND", "auto"),
+            vlm_url=_env("VLM_URL", DEFAULT_VLM_URL).rstrip("/"),
+            vlm_model=_env("VLM_MODEL", DEFAULT_VLM_MODEL),
+            vlm_api_key=_env("VLM_API_KEY"),
+            profile=(profile or _env("CHANGE_DETECT_PROFILE", "pi")),
+            port=int(_env("WEB_PORT", str(DEFAULT_PORT))),
+            public_url=_env("PUBLIC_URL"),
+            heartbeat_enabled=_env("HEARTBEAT", "1") not in ("0", "false", "no"),
             max_upload_mb=int(_env("MAX_UPLOAD_MB", "1024")),
         )
+
+    @property
+    def limits(self) -> dict:
+        return PROFILES.get(self.profile, PROFILES["pi"])
 
     @property
     def reports_dir(self) -> Path:
@@ -83,5 +118,6 @@ class Settings:
         return self.data_dir / "samples"
 
     def ensure_dirs(self) -> None:
-        for d in (self.data_dir, self.reports_dir, self.uploads_dir, self.samples_dir, self.data_dir / "models"):
+        for d in (self.data_dir, self.reports_dir, self.uploads_dir, self.samples_dir, self.data_dir / "models",
+                  self.data_dir / "batches"):
             d.mkdir(parents=True, exist_ok=True)

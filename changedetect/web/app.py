@@ -10,17 +10,19 @@ import threading
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from changedetect import __version__, cot, media, pipeline, synthetic
+from changedetect import __version__, batch, cot, media, pipeline, synthetic
 from changedetect.config import Settings
 from changedetect.gemini import GeminiAdvisor
-from changedetect.labeler import Labeler
+from changedetect.heartbeat import Heartbeat
+from changedetect.labeler import detect_accelerator, make_labeler
 from changedetect.mesh import MeshBus
+from changedetect.vlm import AdvisorChain, OpenAICompatAdvisor
 
 logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
@@ -41,19 +43,39 @@ class MeshRequest(BaseModel):
 class Services:
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.labeler = Labeler(settings.yolo_model)
+        self.labeler = make_labeler(settings.yolo_backend, settings.yolo_model, settings.data_dir / "models",
+                                    settings.yolo_weights)
         self.gemini = GeminiAdvisor(settings.gemini_api_key, settings.gemini_model)
+        self.advisor = AdvisorChain(settings.vlm_backend,
+                                    OpenAICompatAdvisor(settings.vlm_url, settings.vlm_model, settings.vlm_api_key),
+                                    self.gemini)
+        self.accelerator = getattr(self.labeler, "device", None) or detect_accelerator()
         self.cot = cot.CotSender(settings.tak_host, settings.tak_port, settings.cot_enabled)
         self.mesh = MeshBus(settings.mqtt_host, settings.mqtt_port, settings.mqtt_user,
                             settings.mqtt_pass, settings.mesh_enabled)
         self.lock = threading.Lock()  # one analysis at a time (CPU-bound on the Pi)
         self.samples: list[dict] = []
+        self.batches = batch.BatchRunner(settings.data_dir / "batches", settings.reports_dir, self.lock, self.labeler)
+        self.heartbeat = Heartbeat(settings.mqtt_host, settings.mqtt_port, settings.mqtt_user, settings.mqtt_pass,
+                                   settings.port, mode_fn=self.mode, public_url=settings.public_url,
+                                   status_fn=lambda: "busy" if self.lock.locked() else "ok",
+                                   enabled=settings.heartbeat_enabled)
+
+    def mode(self) -> str:
+        if self.settings.simulate:
+            return "simulate"
+        return self.accelerator if self.accelerator in ("cuda", "mps") else "cpu"
+
+    def options(self, **kw) -> pipeline.Options:
+        lim = self.settings.limits
+        return pipeline.Options(max_dim=lim["max_dim"], max_dim_360=lim["max_dim_360"], **kw)
 
 
 def create_app(settings: Settings) -> FastAPI:
     settings.ensure_dirs()
     svc = Services(settings)
     svc.samples = synthetic.write_samples(settings.samples_dir)
+    svc.heartbeat.start()
     app = FastAPI(title="Change Detect", version=__version__)
     app.state.svc = svc
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -80,9 +102,17 @@ def create_app(settings: Settings) -> FastAPI:
         return {
             "version": __version__,
             "simulate": settings.simulate,
+            "profile": settings.profile,
+            "mode": svc.mode(),
+            "accelerator": svc.accelerator,
+            "max_dim": settings.limits["max_dim"],
+            "reports_dir": str(settings.reports_dir),
             "gemini": svc.gemini.status(),
-            "yolo": {"enabled": svc.labeler.enabled, "model": str(settings.yolo_model) if settings.yolo_model else None,
+            "ai": svc.advisor.status(),
+            "yolo": {"enabled": svc.labeler.enabled, "device": getattr(svc.labeler, "device", "cpu"),
+                     "model": str(svc.labeler.model_path) if svc.labeler.model_path else None,
                      "error": None if svc.labeler.enabled else svc.labeler.error},
+            "heartbeat": svc.heartbeat.status(),
             "tak": svc.cot.status(),
             "mesh": svc.mesh.status(),
             "busy": svc.lock.locked(),
@@ -151,9 +181,9 @@ def create_app(settings: Settings) -> FastAPI:
                 tmp.append(apath)
             if mode360 not in ("auto", "on", "off"):
                 raise HTTPException(400, "mode360 must be auto, on or off")
-            opts = pipeline.Options(sensitivity=min(max(sensitivity, 0.0), 1.0), min_area=max(20, min_area),
-                                    mode360=mode360, use_yolo=use_yolo,
-                                    before_time_s=before_time_s, after_time_s=after_time_s)
+            opts = svc.options(sensitivity=min(max(sensitivity, 0.0), 1.0), min_area=max(20, min_area),
+                               mode360=mode360, use_yolo=use_yolo,
+                               before_time_s=before_time_s, after_time_s=after_time_s)
 
             def run():
                 with svc.lock:
@@ -177,8 +207,9 @@ def create_app(settings: Settings) -> FastAPI:
 
     @app.post("/api/results/{rid}/ai")
     async def ai_suggest(rid: str):
-        if not svc.gemini.enabled:
-            raise HTTPException(400, "Gemini is not configured (offline mode). Set GEMINI_API_KEY to enable.")
+        if not svc.advisor.enabled:
+            raise HTTPException(400, "AI suggestions are off: no local VLM reachable "
+                                     f"({svc.advisor.local.url}, model {svc.advisor.local.model}) and no GEMINI_API_KEY.")
         d, result = _load(rid)
 
         def run():
@@ -187,16 +218,17 @@ def create_app(settings: Settings) -> FastAPI:
                 for ch in v["changes"]:
                     b = (d / ch["crops"]["before"]).read_bytes()
                     a = (d / ch["crops"]["after"]).read_bytes()
-                    text = svc.gemini.describe(b, a, ch.get("label_text") or ch["kind"])
+                    text, source = svc.advisor.describe(b, a, ch.get("label_text") or ch["kind"])
                     if text:
                         ch["ai_suggestion"] = text
+                        ch["ai_source"] = source
                         n += 1
-            result["ai_model"] = svc.gemini.model
+            result["ai_model"] = svc.advisor.source_label(svc.advisor.last_source)
             pipeline.rebuild_report(d, result)
             return n
 
         n = await run_in_threadpool(run)
-        return {"described": n, "error": svc.gemini.last_error, "result": result}
+        return {"described": n, "error": svc.advisor.last_error if n == 0 else None, "result": result}
 
     @app.post("/api/results/{rid}/cot")
     async def push_cot(rid: str, req: CotRequest):
@@ -215,7 +247,7 @@ def create_app(settings: Settings) -> FastAPI:
         callsign = req.callsign or f"CHANGE {result['id'][-4:]} ({result['changes_total']})"
         remarks = f"Change detected: {result['summary']} [change-detect {result['id']}; position from " \
                   f"{'manual entry' if manual else result['gps']['source']}; camera position, not the change itself]"
-        xml = cot.build_change_cot(f"change-detect-{result['id']}", lat, lon, callsign, remarks, manual=manual)
+        xml = cot.build_change_cot(f"CHANGE-{result['id']}", lat, lon, callsign, remarks, manual=manual)
         state = svc.cot.send(xml)
         return {"state": state, "tak": svc.cot.status(), "lat": lat, "lon": lon}
 
@@ -227,5 +259,65 @@ def create_app(settings: Settings) -> FastAPI:
             text += f" @{result['gps']['lat']:.5f},{result['gps']['lon']:.5f}"
         ok = await run_in_threadpool(svc.mesh.send, text, req.to)
         return {"sent": ok, "error": svc.mesh.last_error, "text": text[:200]}
+
+    # ------------------------------------------------------------ folder / SD-card batches
+
+    @app.post("/api/batch")
+    async def start_batch(request: Request):
+        form = await request.form(max_files=settings.limits["batch_max_files"] * 2 + 10, max_fields=200)
+        groups = {k: [f for f in form.getlist(k) if hasattr(f, "filename")] for k in ("files", "before_files", "after_files")}
+        try:
+            mtimes = json.loads(form.get("mtimes") or "{}")
+        except ValueError:
+            mtimes = {}
+        n = sum(len(v) for v in groups.values())
+        if n > settings.limits["batch_max_files"]:
+            raise HTTPException(413, f"too many files ({n}); limit is {settings.limits['batch_max_files']} per batch")
+        if not groups["files"] and not (groups["before_files"] and groups["after_files"]):
+            raise HTTPException(400, "drop one SD-card/DCIM folder, or a BEFORE folder and an AFTER folder")
+        bid = svc.batches.new_id()
+        updir = settings.uploads_dir / bid
+        saved: dict[str, list[Path]] = {}
+        limit = settings.max_upload_mb * 1024 * 1024
+        for key, files in groups.items():
+            sub = updir / key
+            sub.mkdir(parents=True, exist_ok=True)
+            saved[key] = []
+            for i, up in enumerate(files):
+                name = Path(up.filename or "f").name
+                if name.startswith("."):
+                    continue  # macOS ._ resource forks on SD cards
+                try:
+                    if media.kind_of(name) != "image":
+                        continue
+                except media.MediaError:
+                    continue  # skip .LRV/.THM/.MP4 sidecars etc.
+                dest = sub / f"{i:04d}_{re.sub(r'[^A-Za-z0-9._-]', '_', name)}"
+                size = 0
+                with open(dest, "wb") as f:
+                    while chunk := await up.read(1024 * 1024):
+                        size += len(chunk)
+                        if size > limit:
+                            raise HTTPException(413, f"{name} larger than {settings.max_upload_mb} MB")
+                        f.write(chunk)
+                saved[key].append(dest)
+        g = lambda k: form.get(k)
+        opts = svc.options(sensitivity=float(g("sensitivity") or 0.5), min_area=max(20, int(float(g("min_area") or 300))),
+                           mode360=g("mode360") or "auto", use_yolo=(g("use_yolo") or "true") == "true")
+        return svc.batches.start(updir, saved["before_files"], saved["after_files"], saved["files"],
+                                 mtimes, opts, bid)
+
+    @app.get("/api/batch/{bid}")
+    async def get_batch(bid: str):
+        if not _ID_RE.match(bid):
+            raise HTTPException(404, "unknown batch")
+        job = svc.batches.get(bid)
+        if job is None:
+            raise HTTPException(404, "unknown batch")
+        return job
+
+    @app.get("/api/batches")
+    async def list_batches(limit: int = 20):
+        return svc.batches.list(limit)
 
     return app

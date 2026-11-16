@@ -11,3 +11,5 @@ data/
 .vscode/
 *.onnx
 .DS_Store
+laptop.env
+.venv-laptop/

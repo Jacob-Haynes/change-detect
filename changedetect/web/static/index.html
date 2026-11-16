@@ -62,12 +62,17 @@
   #history a:hover { color:var(--accent); }
   #msg { min-height:18px; font-size:12px; margin-top:6px; }
   a.btnlink { color:var(--accent); margin-right:12px; }
+  .drop { border:2px dashed var(--line); border-radius:6px; padding:12px 8px; text-align:center; color:var(--muted); font-size:12px; cursor:pointer; margin-top:6px; }
+  .drop.over { border-color:var(--accent); color:var(--text); }
+  .drop.has { border-style:solid; border-color:var(--good); color:var(--text); }
+  #batchtbl td { cursor:pointer; } #batchtbl tr:hover td { background:#222a34; }
 </style>
 </head>
 <body>
 <header>
   <h1>CHANGE DETECT</h1>
   <span id="b-sim" class="badge" hidden>SIMULATE</span>
+  <span id="b-mode" class="badge">…</span>
   <span id="b-ai" class="badge">AI: …</span>
   <span id="b-yolo" class="badge">YOLO: …</span>
   <span id="b-tak" class="badge">TAK: …</span>
@@ -81,9 +86,9 @@
       <label>Bundled sample</label>
       <div class="row"><select id="sample"></select><button id="run-sample" class="secondary" style="flex:0">Run</button></div>
       <label>Before (image or video)</label>
-      <input type="file" id="before" accept="image/*,video/*,.jpg,.jpeg,.png,.mp4,.mov">
+      <input type="file" id="before" accept="image/*,video/*,.jpg,.jpeg,.heic,.png,.mp4,.mov">
       <label>After (image or video)</label>
-      <input type="file" id="after" accept="image/*,video/*,.jpg,.jpeg,.png,.mp4,.mov">
+      <input type="file" id="after" accept="image/*,video/*,.jpg,.jpeg,.heic,.png,.mp4,.mov">
       <div class="row">
         <div><label>Before video time (s, optional)</label><input type="number" id="bt" step="0.5" min="0"></div>
         <div><label>After video time (s, optional)</label><input type="number" id="at" step="0.5" min="0"></div>
@@ -97,6 +102,23 @@
       <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="yolo" checked> Label with YOLO (if model installed)</label>
       <div style="margin-top:10px" class="row"><button id="run">Analyse uploads <span class="spinner">…</span></button></div>
       <div id="msg" class="muted"></div>
+    </div>
+    <div class="panel">
+      <h2>Folder / SD card</h2>
+      <div class="muted">Drag a GoPro/phone/drone-stills folder straight from the SD card. One folder (e.g. DCIM) is split into two passes at the largest time gap. Or drop each pass in its own box.</div>
+      <div class="drop" id="drop-all" data-key="files">Drop SD card / DCIM folder here<br>(auto-split by time)</div>
+      <div class="row">
+        <div class="drop" id="drop-before" data-key="before_files">BEFORE pass folder</div>
+        <div class="drop" id="drop-after" data-key="after_files">AFTER pass folder</div>
+      </div>
+      <div class="row" style="margin-top:8px"><button id="run-batch">Analyse folder(s)</button><button id="clear-batch" class="secondary" style="flex:0">Clear</button></div>
+      <div id="batch-msg" class="muted" style="margin-top:6px"></div>
+    </div>
+    <div class="panel" id="batch-panel" hidden>
+      <h2>Batch <span id="batch-id"></span></h2>
+      <div id="batch-sum" class="muted"></div>
+      <table id="batchtbl" style="margin-top:6px"></table>
+      <div id="batch-unpaired" class="muted" style="margin-top:6px"></div>
     </div>
     <div class="panel">
       <h2>History</h2>
@@ -164,9 +186,14 @@ async function refreshStatus() {
   try {
     status = await (await fetch('/api/status')).json();
     $('b-sim').hidden = !status.simulate; $('b-sim').className = 'badge sim';
-    if (status.gemini.enabled) badge('b-ai', 'AI: CLOUD (' + status.gemini.model + ')', 'cloud');
-    else badge('b-ai', 'AI: OFFLINE (local only)', '');
-    badge('b-yolo', status.yolo.enabled ? 'YOLO: on' : 'YOLO: off', status.yolo.enabled ? 'on' : '');
+    const ai = status.ai;
+    if (ai.active === 'gemini') badge('b-ai', 'AI: ' + ai.source, 'cloud');
+    else if (ai.active === 'openai_compat') badge('b-ai', 'AI: ' + ai.source, 'on');
+    else badge('b-ai', 'AI suggestions: off', '');
+    $('b-ai').title = (ai.local.error || '') + (ai.gemini.last_error ? ' | ' + ai.gemini.last_error : '');
+    badge('b-mode', `${status.profile.toUpperCase()} · ${status.accelerator.toUpperCase()}${status.max_dim ? ' · ' + status.max_dim + 'px' : ' · full-res'}`, '');
+    $('b-mode').title = 'Heartbeat: ' + (status.heartbeat.connected ? 'publishing' : (status.heartbeat.last_error || 'broker not connected'));
+    badge('b-yolo', status.yolo.enabled ? 'YOLO: on (' + status.yolo.device + ')' : (status.yolo.error === 'loading' ? 'YOLO: loading…' : 'YOLO: off'), status.yolo.enabled ? 'on' : '');
     $('b-yolo').title = status.yolo.error || status.yolo.model || '';
     const t = status.tak;
     if (!t.enabled) badge('b-tak', 'TAK: disabled', '');
@@ -176,10 +203,11 @@ async function refreshStatus() {
     badge('b-mesh', status.mesh.enabled ? (status.mesh.last_error ? 'Mesh: broker down' : 'Mesh: ' + (status.mesh.sent ? status.mesh.sent + ' sent' : 'idle')) : 'Mesh: disabled',
           status.mesh.last_error ? 'bad' : '');
     $('b-mesh').title = status.mesh.last_error || '';
-    $('ai').disabled = !status.gemini.enabled;
-    $('ai-note').textContent = status.gemini.enabled
-      ? 'Sends the before/after crops of each change to Google Gemini. Demo footage only.'
-      : 'Offline mode: set GEMINI_API_KEY in /etc/change-detect.env to enable cloud suggestions.';
+    $('ai').disabled = !ai.enabled;
+    $('ai-note').textContent = ai.active === 'gemini'
+      ? 'Source: ' + ai.source + '. Sends the before/after crops of each change to Google. Demo footage only.'
+      : ai.active === 'openai_compat' ? 'Source: ' + ai.source + ' (runs locally, nothing leaves this network).'
+      : 'Off: start Ollama with ' + ai.local.model + ' on this machine, or set GEMINI_API_KEY.';
   } catch (e) { badge('b-tak', 'server unreachable', 'bad'); }
 }
 
@@ -278,7 +306,7 @@ function show(r) {
   $('reports').replaceChildren(
     el('a', { class: 'btnlink', href: url(r.report.png), target: '_blank', text: 'Report PNG' }),
     el('a', { class: 'btnlink', href: url(r.report.pdf), target: '_blank', text: 'Report PDF' }),
-    el('span', { class: 'muted', text: 'Saved under /var/lib/change-detect/reports/' + r.id }));
+    el('span', { class: 'muted', text: 'Saved under ' + ((status && status.reports_dir) || 'reports') + '/' + r.id }));
   if (r.gps) { $('lat').value = r.gps.lat; $('lon').value = r.gps.lon; $('gpsnote').textContent = `From ${r.gps.source} (camera position, not the exact change position). Edit to override.`; }
   else { $('lat').value = ''; $('lon').value = ''; $('gpsnote').textContent = 'No GPS in these files: enter the position manually to push to ATAK.'; }
   $('cot').disabled = !r.alignment_ok;
@@ -328,7 +356,7 @@ function renderChanges() {
       el('div', { class: 'crops' },
         el('figure', {}, el('img', { src: url(c.crops.before) }), el('figcaption', { text: 'before' })),
         el('figure', {}, el('img', { src: url(c.crops.after) }), el('figcaption', { text: 'after (aligned)' }))));
-    if (c.ai_suggestion) card.append(el('div', { class: 'aisug' }, el('b', { text: 'AI suggestion: ' }), c.ai_suggestion));
+    if (c.ai_suggestion) card.append(el('div', { class: 'aisug' }, el('b', { text: 'AI suggestion' + (c.ai_source ? ' (' + c.ai_source + ')' : '') + ': ' }), c.ai_suggestion));
     return card;
   }));
 }
@@ -342,7 +370,7 @@ $('ai').onclick = async () => {
     result = j.result; renderChanges();
     $('ai-note').textContent = `${j.described} change(s) described${j.error ? ' · ' + j.error : ''}. AI suggestions are guesses: check them.`;
   } catch (e) { $('ai-note').textContent = 'AI error: ' + e.message; }
-  finally { $('ai').disabled = !(status && status.gemini.enabled); }
+  finally { $('ai').disabled = !(status && status.ai.enabled); }
 };
 
 $('cot').onclick = async () => {
@@ -361,6 +389,94 @@ $('mesh').onclick = async () => {
   $('share-msg').textContent = j.sent ? 'Mesh text queued: ' + j.text : 'Mesh: ' + (j.error || 'not sent');
   refreshStatus();
 };
+
+// ---------------------------------------------------------------- folder / SD card batches
+const IMG_RE = /\.(jpe?g|heic|heif|png|tiff?|webp)$/i;
+const dropped = { files: [], before_files: [], after_files: [] };
+
+function readAllEntries(dirEntry) {
+  return new Promise((resolve) => {
+    const reader = dirEntry.createReader(); const out = [];
+    const next = () => reader.readEntries((batch) => { if (!batch.length) resolve(out); else { out.push(...batch); next(); } }, () => resolve(out));
+    next();
+  });
+}
+async function walk(entry, out) {
+  if (entry.isFile) {
+    await new Promise((res) => entry.file((f) => { if (IMG_RE.test(f.name) && !f.name.startsWith('.')) out.push(f); res(); }, () => res()));
+  } else if (entry.isDirectory) {
+    for (const e of await readAllEntries(entry)) await walk(e, out);
+  }
+}
+function setDrop(zone) {
+  const key = zone.dataset.key, n = dropped[key].length;
+  zone.classList.toggle('has', n > 0);
+  if (n) zone.textContent = `${n} image${n > 1 ? 's' : ''} ready (${(dropped[key].reduce((a, f) => a + f.size, 0) / 1e6).toFixed(0)} MB)`;
+}
+document.querySelectorAll('.drop').forEach((zone) => {
+  const picker = el('input', { type: 'file', multiple: '', webkitdirectory: '' }); picker.hidden = true;
+  zone.after(picker);
+  zone.onclick = () => picker.click();
+  picker.onchange = () => { dropped[zone.dataset.key] = [...picker.files].filter(f => IMG_RE.test(f.name) && !f.name.startsWith('.')); setDrop(zone); };
+  zone.ondragover = (e) => { e.preventDefault(); zone.classList.add('over'); };
+  zone.ondragleave = () => zone.classList.remove('over');
+  zone.ondrop = async (e) => {
+    e.preventDefault(); zone.classList.remove('over');
+    const out = [];
+    const entries = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+    if (entries.length) for (const en of entries) await walk(en, out);
+    else out.push(...[...e.dataTransfer.files].filter(f => IMG_RE.test(f.name)));
+    dropped[zone.dataset.key] = out; setDrop(zone);
+  };
+});
+$('clear-batch').onclick = () => { for (const k in dropped) dropped[k] = []; document.querySelectorAll('.drop').forEach(z => { z.classList.remove('has'); z.innerHTML = z.id === 'drop-all' ? 'Drop SD card / DCIM folder here<br>(auto-split by time)' : (z.id === 'drop-before' ? 'BEFORE pass folder' : 'AFTER pass folder'); }); $('batch-msg').textContent = ''; };
+
+$('run-batch').onclick = async () => {
+  const twoBox = dropped.before_files.length && dropped.after_files.length;
+  if (!twoBox && !dropped.files.length) { $('batch-msg').textContent = 'Drop one SD-card folder, or a BEFORE and an AFTER folder.'; return; }
+  const f = formData();
+  const mt = {};
+  const add = (key) => dropped[key].forEach(file => { f.append(key, file, file.name); mt[file.name] = file.lastModified; });
+  if (twoBox) { add('before_files'); add('after_files'); } else add('files');
+  f.append('mtimes', JSON.stringify(mt));
+  $('run-batch').disabled = true;
+  $('batch-msg').textContent = 'Uploading…';
+  try {
+    const r = await fetch('/api/batch', { method: 'POST', body: f });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    pollBatch(j.id);
+  } catch (e) { $('batch-msg').textContent = 'Error: ' + e.message; }
+  finally { $('run-batch').disabled = false; }
+};
+
+async function pollBatch(id) {
+  const r = await fetch('/api/batch/' + id); if (!r.ok) return;
+  const j = await r.json();
+  showBatch(j);
+  if (j.state === 'pairing' || j.state === 'analysing') setTimeout(() => pollBatch(id), 2000);
+  else loadHistory();
+}
+function showBatch(j) {
+  $('batch-panel').hidden = false;
+  $('batch-id').textContent = j.id;
+  $('batch-msg').textContent = j.state === 'done' ? 'Batch done in ' + j.elapsed_s + 's' : j.summary;
+  let sum = j.summary + (j.total ? ` (${j.progress}/${j.total})` : '');
+  if (j.split) sum += ` · split at ${Math.round(j.split.split_gap_s / 60)} min gap (${j.split.split_after} | ${j.split.split_before})`;
+  $('batch-sum').textContent = sum;
+  const t = $('batchtbl');
+  t.replaceChildren(el('tr', {}, ...['#', 'Before', 'After', 'Align', 'Changes'].map(h => el('th', { text: h }))));
+  (j.pairs || []).forEach((p, i) => {
+    const tr = el('tr', {}, el('td', { text: i + 1 }), el('td', { text: p.before }), el('td', { text: p.after }),
+      el('td', { class: 'grade ' + (p.grade || ''), text: p.error ? 'error' : (p.grade || '…') }),
+      el('td', { text: p.result_id ? (p.alignment_ok ? p.changes : '—') : '…' }));
+    if (p.result_id) tr.onclick = () => openResult(p.result_id);
+    t.append(tr);
+  });
+  const un = [...(j.unpaired_before || []).map(n => 'before:' + n), ...(j.unpaired_after || []).map(n => 'after:' + n)];
+  $('batch-unpaired').textContent = un.length ? `No match found for ${un.length}: ${un.slice(0, 12).join(', ')}${un.length > 12 ? '…' : ''}` : '';
+  if (j.error) $('batch-unpaired').textContent = 'Error: ' + j.error;
+}
 
 (async () => {
   await refreshStatus(); await loadSamples(); await loadHistory();

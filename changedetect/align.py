@@ -85,8 +85,23 @@ def _convex(quad: np.ndarray) -> bool:
     return all(signs) or not any(signs)
 
 
-def align(before: np.ndarray, after: np.ndarray) -> Alignment:
-    gb, ga = _gray(before), _gray(after)
+ALIGN_MAX_DIM = 2000
+
+
+def _shrink(img: np.ndarray, max_dim: int) -> tuple[np.ndarray, float]:
+    h, w = img.shape[:2]
+    s = min(1.0, max_dim / max(h, w))
+    if s >= 1.0:
+        return img, 1.0
+    return cv2.resize(img, (round(w * s), round(h * s)), interpolation=cv2.INTER_AREA), s
+
+
+def align(before: np.ndarray, after: np.ndarray, max_dim: int = ALIGN_MAX_DIM) -> Alignment:
+    """Align AFTER onto BEFORE. Features are matched on <=max_dim copies (fast on full-res
+    GoPro/4K stills); the homography is then rescaled to full resolution."""
+    sb_img, sb = _shrink(before, max_dim)
+    sa_img, sa = _shrink(after, max_dim)
+    gb, ga = _gray(sb_img), _gray(sa_img)
     h, w = gb.shape[:2]
     best: Alignment | None = None
     for method in available_methods():
@@ -95,6 +110,12 @@ def align(before: np.ndarray, after: np.ndarray) -> Alignment:
             best = res
         if res.grade == "good":
             break
+    if best.H is not None and (sb != 1.0 or sa != 1.0):
+        Sb = np.diag([sb, sb, 1.0])
+        Sa = np.diag([sa, sa, 1.0])
+        best.H = (np.linalg.inv(Sb) @ np.array(best.H) @ Sa).tolist()
+        if best.reproj_error_px is not None:
+            best.reproj_error_px = round(best.reproj_error_px / sb, 2)
     return best
 
 

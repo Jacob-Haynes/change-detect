@@ -9,10 +9,15 @@ Raspberry Pi 5 CPU (OpenCV, no AI accelerator) with a web UI on **port 8130**.
 
 ## What it does
 
-1. **Inputs** (web UI): upload two stills or two videos from a drone, GoPro or phone, or pick a
-   bundled sample. For videos it samples frames from both clips and picks the sharpest pair that
-   overlaps best (you can give an approximate time in each clip). EXIF GPS, capture time and camera
-   are read where present.
+1. **Inputs** (web UI): upload two stills or two videos, or pick a bundled sample. Stills can be
+   JPEG, PNG or iPhone HEIC. Videos can be MP4/MOV, including DJI O3/O4 onboard recordings
+   (H.264/H.265, 4K, usually no GPS). For videos it samples frames from both clips and picks the
+   sharpest pair that overlaps best; you can give an approximate time in each clip. EXIF GPS,
+   capture time and camera are read where present.
+   **Folder / SD card:** drag a DCIM folder straight from the card. One folder is split into two
+   passes at the largest gap in capture time. Or drop each pass in its own box. Matching shots are
+   paired by GPS (within 40 m), by position in the sequence and by feature matching, and each pair
+   is analysed. Sidecar files (`.LRV`, `.THM`, `._*`) are skipped.
 2. **360 stills** (equirectangular, 2:1, or tagged `GPano:ProjectionType=equirectangular`): it
    estimates the heading difference between the two panoramas, then compares four matching
    perspective views (front/right/back/left).
@@ -29,14 +34,20 @@ Raspberry Pi 5 CPU (OpenCV, no AI accelerator) with a web UI on **port 8130**.
 6. **Outputs**: side-by-side, swipe slider, heatmap overlay, numbered change boxes (click to toggle
    before/after), per-change before/after crops, and a **PNG + PDF report** saved to
    `/var/lib/change-detect/reports/<id>/` (with the original files and `result.json`).
-7. **Optional AI suggestion** (Gemini): sends the two aligned crops of each change to Google and
-   shows a one-line description labelled "AI suggestion".
+7. **Optional AI suggestion:** sends the two aligned crops of each change to a vision model and
+   shows a one-line description labelled "AI suggestion (source)". `VLM_BACKEND=auto` tries a local
+   OpenAI-compatible endpoint first (Ollama on the HQ Mac, `qwen3-vl:8b`, offline), then Gemini
+   if `GEMINI_API_KEY` is set, otherwise off. `openai_compat`, `gemini` or `off` forces one backend.
 8. **Optional ATAK**: pushes a CoT "change detected" marker (`a-u-G`, unknown ground) with the
    summary, using EXIF GPS or a manually entered lat/lon. **Mesh**: sends a short summary text over
    the Meshtastic mesh via the blufor-tracker bridge.
 
-The header always shows which modes are active: `SIMULATE`, `AI: OFFLINE` or `AI: CLOUD (model)`,
-YOLO on/off, TAK connection and mesh state.
+The header always shows which modes are active: `SIMULATE`, profile and accelerator
+(`PI · CPU · 1600px`, `LAPTOP · MPS · full-res`), the AI suggestion source (local VLM, Gemini
+cloud, or off), YOLO on/off and its device, TAK connection, and mesh state.
+
+Every 10 s it publishes a retained heartbeat to `isrkit/heartbeat/change-detect`
+(`{"tool","host","url","mode","status","ts"}`), so the Pi launcher can link to it wherever it runs.
 
 ## Install on the Pi
 
@@ -59,9 +70,15 @@ sudo pi-profiles bft-change-detect      # with OpenTAKServer + mesh bridge, for 
 |---|---|---|
 | `TAK_HOST` / `TAK_PORT` | `127.0.0.1` / `8087` | CoT TCP output. If the TAK server is down, markers queue and retry with backoff. |
 | `MQTT_HOST` / `MQTT_PORT` / `MQTT_USER` / `MQTT_PASS` | `127.0.0.1` / `1883` / `guest` / `guest` | Publishes to `meshbus/tx`. It never opens the radio itself. |
-| `GEMINI_API_KEY` | empty | Empty means offline. Set it to enable AI suggestions. |
+| `VLM_BACKEND` | `auto` | `auto` (local VLM → Gemini → off), `openai_compat`, `gemini` or `off`. |
+| `VLM_URL` / `VLM_MODEL` | `http://localhost:11434/v1` / `qwen3-vl:8b` | OpenAI-compatible vision endpoint (Ollama). |
+| `GEMINI_API_KEY` | empty | Empty means no cloud. Set it to allow Gemini suggestions. |
 | `GEMINI_MODEL` | `gemini-3.8-flash` | Any current Gemini model that accepts images. |
-| `YOLO_MODEL` | `/var/lib/change-detect/models/yolo11n.onnx` | Optional labelling model. |
+| `YOLO_BACKEND` | `auto` | `auto` uses ultralytics (PyTorch) if installed (laptop), else ONNX via OpenCV (Pi). `off` disables YOLO. |
+| `YOLO_MODEL` | `/var/lib/change-detect/models/yolo11n.onnx` | ONNX model for the Pi path. |
+| `YOLO_WEIGHTS` | `yolo11m.pt` on MPS/CUDA, `yolo11n.pt` on CPU | Ultralytics weights for the laptop path. |
+| `CHANGE_DETECT_PROFILE` | `pi` | `pi` downscales stills to 1600 px. `laptop` keeps full resolution. |
+| `HEARTBEAT` / `PUBLIC_URL` | `1` / auto | Heartbeat on/off, and the URL it advertises. |
 | `CHANGE_DETECT_ARGS` | empty | e.g. `--simulate` or `--no-cot`. |
 
 ### Optional: YOLO nano labels
@@ -83,6 +100,41 @@ and poor results on top-down drone imagery from height.
 
 > **Cloud mode sends image crops to Google.** Use demo footage only. Never use real operational
 > imagery. With no key, or with no internet, everything else works offline.
+
+## Running on a laptop
+
+The Pi stays the hub (hotspot, OpenTAKServer, mesh bridge, MQTT broker, launcher). change-detect
+can instead run on the **HQ Mac** (Apple Silicon, the analysis station). The Mac joins the Pi's
+hotspot, and everything else works the same.
+
+```bash
+git clone <this repo> && cd change-detect
+scripts/run-laptop.sh                 # first run: creates laptop.env and .venv-laptop, installs PyTorch
+# edit laptop.env: MQTT_PASS = the isrkit password from the Pi, then run again
+open http://localhost:8130/
+```
+
+- **Laptop profile.** Stills stay at **full resolution**: GoPro 27 MP, 360 at 5.7K+, 4K drone
+  frames. Alignment runs on a 2000 px copy and is rescaled, so it stays fast.
+- **YOLO on the laptop** uses PyTorch with the accelerator chosen automatically (CUDA, then Apple
+  MPS, then CPU). It runs **yolo11m** on a GPU/MPS and yolo11n on CPU. The weights download once
+  into `~/change-detect-data/models/`, so do that while you have internet.
+- **Offline AI suggestions:** install [Ollama](https://ollama.com) on the HQ Mac and run
+  `ollama pull qwen3-vl:8b` (about 6 GB, fine on 64 GB). Leave `VLM_BACKEND=auto`: suggestions then
+  stay on the Mac, and the UI shows "local VLM (qwen3-vl:8b)". If Ollama isn't running and
+  `GEMINI_API_KEY` is set, it falls back to Gemini cloud.
+- **Pi address.** `laptop.env` points `TAK_HOST` and `MQTT_HOST` at `isr-pi.local`. If mDNS fails
+  on the hotspot, put in the Pi's fixed hotspot IP. Variables already set in your shell override
+  `laptop.env`.
+- **MQTT from the laptop** must use the `isrkit` user, because RabbitMQ's `guest` account only
+  works on the Pi itself.
+- **macOS prompts** "allow incoming connections" for Python the first time: allow it, so phones
+  on the hotspot can reach the UI. The script keeps the Mac awake (`caffeinate`) while it runs.
+- **Windows** (secondary): `powershell -ExecutionPolicy Bypass -File scripts\run-laptop.ps1`.
+  It installs CUDA PyTorch if `nvidia-smi` is present.
+- Reports go to `~/change-detect-data/reports/`.
+- Don't run change-detect on the Pi and the Mac at the same time: both publish the same
+  heartbeat topic.
 
 ## Run on a Mac (no hardware)
 
@@ -136,7 +188,12 @@ and the Pi running `bft-change-detect` with ATAK on a phone.
 - **Hold still:** blur kills feature matching. For video, pause for 2 s at each point.
 - **360 camera:** export an equirectangular JPEG (2:1) from the camera app, and keep the camera at
   the same height on the same spot. The heading difference is corrected automatically.
-- **Phone JPEGs:** use "Most Compatible" (JPEG) rather than HEIC, and leave location on for EXIF GPS.
+- **Phone photos:** HEIC and JPEG both work. Leave location on for EXIF GPS, and use the 1× lens
+  both times.
+- **DJI O3/O4 recordings:** fly the same line twice at the same height. Hover or slow down over each
+  point of interest, and give the approximate time in each clip. Turn off EIS/RockSteady
+  horizon-lock differences between runs. These clips usually have no GPS, so type the position
+  into the ATAK box.
 
 ## Limitations
 
@@ -147,10 +204,13 @@ and the Pi running `bft-change-detect` with ATAK on a phone.
   and seasonal change still produce false alarms.
 - The marker position is the **camera's** EXIF GPS (or manual entry), not a geolocated position of
   each change. Imagery is not orthorectified.
-- GoPro MP4 telemetry (GPMF GPS) and Insta360 `.insv` files are not parsed, and HEIC is not
-  supported. Use JPEG stills or exported equirectangular JPEGs, and enter the position manually
-  for video.
+- GoPro MP4 telemetry (GPMF GPS) and DJI SRT subtitles are not parsed, so enter the position
+  manually for video. Insta360 `.insv` dual-fisheye files are not supported: export an
+  equirectangular JPEG or MP4 from the Insta360 app first.
+- Folder auto-split needs capture times (EXIF, or the file dates the browser sends) with one clear
+  break between passes. Otherwise use the two boxes.
 - Change "kind" (new / removed / surface change) is an edge- and colour-based heuristic. YOLO labels
   depend on the optional model and are weak on top-down imagery.
-- Processing works at about 1600 px (360 views at 960×720), so very small objects need closer shots.
+- On the Pi, processing works at about 1600 px (360 views at about 1024×768), so very small objects
+  need closer shots, or the laptop profile.
 - The ATAK marker is a single point per analysis, and one analysis runs at a time.

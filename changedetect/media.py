@@ -12,7 +12,15 @@ from PIL import Image, ImageOps
 
 logger = logging.getLogger(__name__)
 
-IMAGE_EXT = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp"}
+try:  # iPhone HEIC/HEIF stills
+    from pillow_heif import register_heif_opener
+
+    register_heif_opener()
+    HEIF_OK = True
+except Exception:  # pragma: no cover - optional dependency
+    HEIF_OK = False
+
+IMAGE_EXT = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp", ".heic", ".heif"}
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".avi", ".mkv"}
 
 # EXIF tag ids
@@ -51,11 +59,16 @@ class MediaMeta:
 
 def kind_of(path: str | Path) -> str:
     ext = Path(path).suffix.lower()
+    if ext in (".heic", ".heif") and not HEIF_OK:
+        raise MediaError("HEIC support needs the pillow-heif package (pip install pillow-heif).")
     if ext in IMAGE_EXT:
         return "image"
     if ext in VIDEO_EXT:
         return "video"
-    raise MediaError(f"Unsupported file type '{ext}'. Use JPEG/PNG stills or MP4/MOV video.")
+    if ext == ".insv":
+        raise MediaError("Insta360 .insv (dual fisheye) is not supported: export an equirectangular JPEG/MP4 "
+                         "from the Insta360 app first.")
+    raise MediaError(f"Unsupported file type '{ext}'. Use JPEG/HEIC/PNG stills or MP4/MOV video.")
 
 
 def _rational(v) -> float:
@@ -138,6 +151,8 @@ def load_image(path: str | Path, max_dim: int | None = None) -> np.ndarray:
     """Load a still as BGR uint8, honouring EXIF orientation, optionally downscaled."""
     try:
         with Image.open(path) as im:
+            if max_dim and im.format == "JPEG":
+                im.draft("RGB", (max_dim, max_dim))  # fast DCT downscale for big GoPro/drone stills
             im = ImageOps.exif_transpose(im)
             rgb = np.asarray(im.convert("RGB"))
     except Exception as e:

@@ -30,8 +30,12 @@ fi
 
 echo "[3/6] Copy code to $APP_DIR"
 mkdir -p "$APP_DIR"
-rsync -a --delete --exclude '.venv' --exclude '__pycache__' --exclude 'data' \
-    "$SRC_DIR/changedetect" "$SRC_DIR/deploy" "$SRC_DIR/profiles.d" "$SRC_DIR/requirements.txt" "$APP_DIR/"
+if [ "$(realpath "$SRC_DIR")" = "$(realpath "$APP_DIR")" ]; then
+    echo "    running from $APP_DIR itself: skipping copy"
+else
+    rsync -a --delete --exclude '.venv' --exclude '__pycache__' --exclude 'data' \
+        "$SRC_DIR/changedetect" "$SRC_DIR/deploy" "$SRC_DIR/profiles.d" "$SRC_DIR/requirements.txt" "$APP_DIR/"
+fi
 chmod +x "$APP_DIR/deploy/start.sh"
 
 echo "[4/6] Python venv"
