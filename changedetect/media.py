@@ -20,8 +20,12 @@ try:  # iPhone HEIC/HEIF stills
 except Exception:  # pragma: no cover - optional dependency
     HEIF_OK = False
 
-IMAGE_EXT = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp", ".heic", ".heif"}
-VIDEO_EXT = {".mp4", ".mov", ".m4v", ".avi", ".mkv"}
+# .insp = Insta360 ONE still (a JPEG of two side-by-side fisheye circles); .insv = its MP4 video
+IMAGE_EXT = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp", ".heic", ".heif", ".insp"}
+VIDEO_EXT = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".insv"}
+DUAL_FISHEYE_EXT = {".insp", ".insv"}
+# Insta360 ONE lenses are ~210 deg; 200 is a safe usable field per lens. Override with FISHEYE_FOV_DEG.
+DEFAULT_FISHEYE_FOV = 200.0
 
 # EXIF tag ids
 _EXIF_IFD = 0x8769
@@ -65,9 +69,6 @@ def kind_of(path: str | Path) -> str:
         return "image"
     if ext in VIDEO_EXT:
         return "video"
-    if ext == ".insv":
-        raise MediaError("Insta360 .insv (dual fisheye) is not supported: export an equirectangular JPEG/MP4 "
-                         "from the Insta360 app first.")
     raise MediaError(f"Unsupported file type '{ext}'. Use JPEG/HEIC/PNG stills or MP4/MOV video.")
 
 
@@ -174,7 +175,78 @@ def looks_equirect(img: np.ndarray, meta: MediaMeta | None = None) -> bool:
     if meta is not None and meta.equirect_tag:
         return True
     h, w = img.shape[:2]
-    return w >= 1500 and abs(w / h - 2.0) < 0.02
+    return w >= 1500 and abs(w / h - 2.0) < 0.02 and not looks_dual_fisheye(img)
+
+
+# ---------------------------------------------------------------- dual fisheye (Insta360 ONE)
+
+
+def looks_dual_fisheye(img: np.ndarray) -> bool:
+    """Two fisheye circles side by side: ~2:1 frame, each half has dark corners and a bright middle."""
+    h, w = img.shape[:2]
+    if h < 200 or abs(w / h - 2.0) > 0.05:
+        return False
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    k = max(4, h // 20)
+    for x0 in (0, w // 2):
+        half = gray[:, x0:x0 + w // 2]
+        hh, hw = half.shape
+        corners = np.concatenate([half[:k, :k].ravel(), half[:k, -k:].ravel(),
+                                  half[-k:, :k].ravel(), half[-k:, -k:].ravel()])
+        centre = half[hh // 2 - 2 * k:hh // 2 + 2 * k, hw // 2 - 2 * k:hw // 2 + 2 * k]
+        if np.median(corners) > 25 or centre.mean() < np.median(corners) + 20:
+            return False
+    return True
+
+
+def _circle(half_gray: np.ndarray) -> tuple[float, float, float]:
+    """Centre and radius of the lit fisheye circle in one half (falls back to the inscribed circle)."""
+    h, w = half_gray.shape
+    mask = half_gray > 18
+    ys, xs = np.nonzero(mask)
+    if len(xs) < 0.3 * h * w * np.pi / 4:
+        return w / 2, h / 2, min(w, h) / 2
+    x0, x1 = np.percentile(xs, [0.2, 99.8])
+    y0, y1 = np.percentile(ys, [0.2, 99.8])
+    r = max(x1 - x0, y1 - y0) / 2
+    return (x0 + x1) / 2, (y0 + y1) / 2, min(r, min(w, h) / 2 * 1.02)
+
+
+def dual_fisheye_to_equirect(img: np.ndarray, fov_deg: float = DEFAULT_FISHEYE_FOV,
+                             out_w: int | None = None) -> np.ndarray:
+    """Unwarp a side-by-side dual-fisheye frame to an equirectangular panorama.
+
+    Equidistant lens model, left circle = front (+z), right circle = back (-z), no seam blending.
+    Not a calibrated stitch: before and after go through the same mapping, so the comparison
+    stays consistent even if the result is slightly off true geometry.
+    """
+    h, w = img.shape[:2]
+    half = w // 2
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    circles = [_circle(gray[:, :half]), _circle(gray[:, half:2 * half])]
+    out_w = out_w or min(2 * half, 6144)
+    out_h = out_w // 2
+    lon = (np.arange(out_w, dtype=np.float32) + 0.5) / out_w * 2 * np.pi - np.pi
+    lat = np.pi / 2 - (np.arange(out_h, dtype=np.float32) + 0.5) / out_h * np.pi
+    lon, lat = np.meshgrid(lon, lat)
+    x = np.cos(lat) * np.sin(lon)
+    y = -np.sin(lat)
+    z = np.cos(lat) * np.cos(lon)
+    half_fov = np.radians(fov_deg) / 2
+    front = z >= 0
+    map_x = np.empty_like(x)
+    map_y = np.empty_like(x)
+    for is_front, (cx, cy, r), off in ((True, circles[0], 0), (False, circles[1], half)):
+        sel = front if is_front else ~front
+        xx = x if is_front else -x
+        zz = z if is_front else -z
+        theta = np.arccos(np.clip(zz, -1, 1))
+        phi = np.arctan2(y, xx)
+        rr = theta / half_fov * r
+        map_x[sel] = (off + cx + rr * np.cos(phi))[sel]
+        map_y[sel] = (cy + rr * np.sin(phi))[sel]
+    return cv2.remap(img, map_x.astype(np.float32), map_y.astype(np.float32), cv2.INTER_LINEAR,
+                     borderMode=cv2.BORDER_CONSTANT)
 
 
 # ---------------------------------------------------------------- video

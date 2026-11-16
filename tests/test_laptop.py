@@ -61,9 +61,8 @@ def test_heic_gps(tmp_path):
     assert media.load_image(tmp_path / "IMG_0001.HEIC").shape == (200, 300, 3)
 
 
-def test_insv_gets_helpful_error():
-    with pytest.raises(media.MediaError, match="equirectangular"):
-        media.kind_of("VID_001.insv")
+def test_insta360_extensions_are_accepted():
+    assert media.kind_of("IMG_001.insp") == "image" and media.kind_of("VID_001.insv") == "video"
 
 
 # ---------------------------------------------------------------- batches

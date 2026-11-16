@@ -86,9 +86,9 @@
       <label>Bundled sample</label>
       <div class="row"><select id="sample"></select><button id="run-sample" class="secondary" style="flex:0">Run</button></div>
       <label>Before (image or video)</label>
-      <input type="file" id="before" accept="image/*,video/*,.jpg,.jpeg,.heic,.png,.mp4,.mov">
+      <input type="file" id="before" accept="image/*,video/*,.jpg,.jpeg,.heic,.png,.mp4,.mov,.insp,.insv">
       <label>After (image or video)</label>
-      <input type="file" id="after" accept="image/*,video/*,.jpg,.jpeg,.heic,.png,.mp4,.mov">
+      <input type="file" id="after" accept="image/*,video/*,.jpg,.jpeg,.heic,.png,.mp4,.mov,.insp,.insv">
       <div class="row">
         <div><label>Before video time (s, optional)</label><input type="number" id="bt" step="0.5" min="0"></div>
         <div><label>After video time (s, optional)</label><input type="number" id="at" step="0.5" min="0"></div>
@@ -275,7 +275,7 @@ function show(r) {
   s.className = r.alignment_ok ? (r.changes_total ? '' : 'good') : 'failed';
   const b = r.inputs.before, a = r.inputs.after;
   const fmt = (m) => `${m.name}${m.time ? ' · ' + m.time : ''}${m.frame_time_s != null ? ' · frame @' + m.frame_time_s + 's' : ''}${m.lat != null ? ' · GPS ' + m.lat.toFixed(5) + ',' + m.lon.toFixed(5) : ' · no GPS'}`;
-  let meta = `Before: ${fmt(b)}  |  After: ${fmt(a)}  |  mode ${r.mode}`;
+  let meta = `Before: ${fmt(b)}  |  After: ${fmt(a)}  |  mode ${r.mode}${r.projection === 'dual-fisheye' ? ' (Insta360 dual-fisheye, unwarped)' : ''}`;
   if (r.yaw_offset) meta += ` · heading offset ${r.yaw_offset.deg}° (conf ${r.yaw_offset.confidence})`;
   if (r.video) meta += ` · video frames matched with ${r.video.match_inliers} inliers`;
   meta += r.yolo_used ? ' · YOLO labels on' : ' · YOLO labels off';
@@ -391,7 +391,7 @@ $('mesh').onclick = async () => {
 };
 
 // ---------------------------------------------------------------- folder / SD card batches
-const IMG_RE = /\.(jpe?g|heic|heif|png|tiff?|webp)$/i;
+const IMG_RE = /\.(jpe?g|heic|heif|png|tiff?|webp|insp)$/i;
 const dropped = { files: [], before_files: [], after_files: [] };
 
 function readAllEntries(dirEntry) {

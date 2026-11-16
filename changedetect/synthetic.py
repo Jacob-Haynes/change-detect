@@ -224,3 +224,33 @@ def write_samples(samples_dir: Path, force: bool = False) -> list[dict]:
     ]
     index_path.write_text(json.dumps(index, indent=2))
     return index
+
+
+def equirect_to_dual_fisheye(eq: np.ndarray, size: int = 1024, fov_deg: float = 200.0, fill: float = 0.97) -> np.ndarray:
+    """Render a side-by-side dual-fisheye frame (Insta360 ONE layout) from an equirectangular image,
+    using the same equidistant model as media.dual_fisheye_to_equirect."""
+    H, W = eq.shape[:2]
+    r_max = size / 2 * fill
+    ys, xs = np.mgrid[0:size, 0:size].astype(np.float32)
+    dx, dy = xs + 0.5 - size / 2, ys + 0.5 - size / 2
+    r = np.sqrt(dx ** 2 + dy ** 2)
+    phi = np.arctan2(dy, dx)
+    theta = r / r_max * np.radians(fov_deg) / 2
+    out = np.zeros((size, 2 * size, 3), np.uint8)
+    for k, sign in ((0, 1.0), (1, -1.0)):
+        x = sign * np.sin(theta) * np.cos(phi)
+        y = np.sin(theta) * np.sin(phi)
+        z = sign * np.cos(theta)
+        lon = np.arctan2(x, z)
+        lat = np.arcsin(np.clip(-y, -1, 1))
+        mx = ((lon / (2 * np.pi) + 0.5) * W).astype(np.float32) % W
+        my = np.clip((0.5 - lat / np.pi) * H, 0, H - 1).astype(np.float32)
+        lens = cv2.remap(eq, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_WRAP)
+        lens[r > r_max] = 0
+        out[:, k * size:(k + 1) * size] = lens
+    return out
+
+
+def make_dual_fisheye_pair(seed: int = 11, yaw_offset_deg: float = 37.0, size: int = 1024):
+    eb, ea, truth = make_equirect_pair(seed=seed, yaw_offset_deg=yaw_offset_deg, w=4 * size)
+    return equirect_to_dual_fisheye(eb, size), equirect_to_dual_fisheye(ea, size), truth

@@ -10,17 +10,23 @@ Raspberry Pi 5 CPU (OpenCV, no AI accelerator) with a web UI on **port 8130**.
 ## What it does
 
 1. **Inputs** (web UI): upload two stills or two videos, or pick a bundled sample. Stills can be
-   JPEG, PNG or iPhone HEIC. Videos can be MP4/MOV, including DJI O3/O4 onboard recordings
-   (H.264/H.265, 4K, usually no GPS). For videos it samples frames from both clips and picks the
+   JPEG, PNG or iPhone HEIC. Videos can be MP4/MOV, including GoPro Hero 4 clips (no GPS) and DJI
+   O3/O4 onboard recordings (H.264/H.265, 4K, usually no GPS). For videos it samples frames from both clips and picks the
    sharpest pair that overlaps best; you can give an approximate time in each clip. EXIF GPS,
    capture time and camera are read where present.
    **Folder / SD card:** drag a DCIM folder straight from the card. One folder is split into two
    passes at the largest gap in capture time. Or drop each pass in its own box. Matching shots are
    paired by GPS (within 40 m), by position in the sequence and by feature matching, and each pair
    is analysed. Sidecar files (`.LRV`, `.THM`, `._*`) are skipped.
-2. **360 stills** (equirectangular, 2:1, or tagged `GPano:ProjectionType=equirectangular`): it
-   estimates the heading difference between the two panoramas, then compares four matching
-   perspective views (front/right/back/left).
+2. **360** inputs come in two kinds:
+   - **Equirectangular** (2:1, or tagged `GPano:ProjectionType=equirectangular`).
+   - **Raw dual-fisheye from the original Insta360 ONE**: `.insp` stills are read as JPEG and
+     `.insv` video as MP4. The side-by-side two-circle layout is checked first, and a file that
+     fails the check is rejected with a message suggesting the iPhone or GoPro. Each lens is
+     unwarped to a panorama with an equidistant model (`FISHEYE_FOV_DEG`, default 200).
+
+   For both kinds it estimates the heading difference between the two panoramas, then compares
+   four matching perspective views (front/right/back/left).
 3. **Align**: AKAZE features (ORB/SIFT on OpenCV 5, which dropped AKAZE from core), ratio-test
    matching, RANSAC homography. The alignment is graded **good / marginal / failed** from the inlier
    count, inlier ratio, overlap, how spread out the matches are, residual error and a geometry
@@ -59,9 +65,11 @@ launcher can link to it wherever it runs. The payload is
 ```bash
 git clone <this repo> && cd change-detect
 sudo bash deploy/install.sh
-sudo pi-profiles change-detect          # standalone
-sudo pi-profiles bft-change-detect      # with OpenTAKServer + mesh bridge, for ATAK markers and mesh texts
+sudo pi-profiles change-detect          # this repo ships only its own profiles.d/change-detect.conf
 ```
+
+Combined profiles (for example with OpenTAKServer and the mesh bridge, so markers reach ATAK)
+belong to the pi-platform repo, not this one.
 
 - Code: `/opt/change-detect` (venv in `.venv`). Data and reports: `/var/lib/change-detect`.
   Config: `/etc/change-detect.env` (created from `deploy/change-detect.env.example`, root-only).
@@ -166,8 +174,9 @@ running.
 
 ## Demo script (about 20 minutes)
 
-**Kit:** GoPro (or phone), optionally the FPV drone or the 360 camera, a car or a pile of kit,
-and the Pi running `bft-change-detect` with ATAK on a phone.
+**Kit:** iPhone or GoPro Hero 4, optionally the FPV drone (DJI O3/O4 recordings) or the
+Insta360 ONE, a car or a pile of kit, and the Pi running a pi-platform profile that includes
+change-detect and OpenTAKServer, with ATAK on a phone.
 
 1. **Brief (2 min):** recce teams revisit a location and ask "what's different?". Comparing photos
    by eye is slow and easy to get wrong. Show the synthetic sample in the UI first.
@@ -193,15 +202,19 @@ and the Pi running `bft-change-detect` with ATAK on a phone.
 - **Same position, height and heading.** Mark the spot (a stake, a post, a GPS waypoint), note the
   compass heading, and for the drone hold the same altitude AGL and the same gimbal angle.
   Overhead (nadir) shots align best, because the ground is flat to the camera.
-- **Same camera settings:** the same lens mode (GoPro *Linear* rather than *Wide/SuperView*, which
-  distorts), the same zoom, and stills rather than video where possible.
+- **Same camera settings:** the same lens mode. On the GoPro Hero 4, prefer *Medium* over *Wide*
+  field of view, because the wide fisheye bends straight lines and hurts alignment. Use the same
+  mode on both passes, the same zoom, and stills rather than video where possible.
 - **Similar light:** about the same time of day, and avoid moving cloud shadows. Changing shadows
   are the biggest source of false alarms.
 - **Overlap:** frame each shot so that at least 60 % of the scene appears in both passes, with
   plenty of fixed texture (tracks, fence lines, buildings).
 - **Hold still:** blur kills feature matching. For video, pause for 2 s at each point.
-- **360 camera:** export an equirectangular JPEG (2:1) from the camera app, and keep the camera at
-  the same height on the same spot. The heading difference is corrected automatically.
+- **360 camera (Insta360 ONE):** raw `.insp` and `.insv` files can go straight in; an
+  equirectangular export also works. Keep the camera at the same height on the same spot, upright,
+  on a stick or tripod. The heading difference is corrected automatically. The person holding the
+  camera appears in the nadir and differs between passes, so expect some noise low in the
+  side views.
 - **Phone photos:** HEIC and JPEG both work. Leave location on for EXIF GPS, and use the 1× lens
   both times.
 - **DJI O3/O4 recordings:** fly the same line twice at the same height. Hover or slow down over each
@@ -218,9 +231,14 @@ and the Pi running `bft-change-detect` with ATAK on a phone.
   and seasonal change still produce false alarms.
 - The marker position is the **camera's** EXIF GPS (or manual entry), not a geolocated position of
   each change. Imagery is not orthorectified.
-- GoPro MP4 telemetry (GPMF GPS) and DJI SRT subtitles are not parsed, so enter the position
-  manually for video. Insta360 `.insv` dual-fisheye files are not supported: export an
-  equirectangular JPEG or MP4 from the Insta360 app first.
+- GoPro Hero 4 has no GPS, and DJI SRT subtitles are not parsed, so enter the position manually
+  for those.
+- **The Insta360 ONE unwarp is uncalibrated.** It uses an equidistant model with a fixed field of
+  view, does no seam blending, and its orientation has not been checked against real ONE files.
+  Before and after go through the same mapping, so the comparison stays consistent, but the
+  views can look slightly bent or rotated, and changes on the lens seam (the 90° and 270° views)
+  are less reliable. It has only been tested on synthetic dual-fisheye frames. If real files look
+  wrong, tune `FISHEYE_FOV_DEG` or use an equirectangular export.
 - Folder auto-split needs capture times (EXIF, or the file dates the browser sends) with one clear
   break between passes. Otherwise use the two boxes.
 - Change "kind" (new / removed / surface change) is an edge- and colour-based heuristic. YOLO labels

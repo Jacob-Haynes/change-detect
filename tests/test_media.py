@@ -23,7 +23,7 @@ def test_no_exif_is_fine(tmp_path):
 
 def test_unsupported_type():
     with pytest.raises(media.MediaError):
-        media.kind_of("clip.insv")
+        media.kind_of("clip.xyz")
 
 
 def test_equirect_tag_detected(samples):
@@ -99,3 +99,62 @@ def test_dji_style_mp4_decodes(tmp_path, fourcc):
     frames = media.sample_video(p, n=4, max_dim=None)
     assert len(frames) >= 3 and frames[0][1].shape == (720, 1280, 3)
     assert media.kind_of(p) == "video"
+
+
+# ---------------------------------------------------------------- Insta360 ONE dual fisheye
+
+def test_dual_fisheye_layout_detection():
+    b, _, _ = synthetic.make_dual_fisheye_pair(size=512)
+    assert media.looks_dual_fisheye(b)
+    eq, _, _ = synthetic.make_equirect_pair(w=2048)
+    assert not media.looks_dual_fisheye(eq) and media.looks_equirect(eq)
+    assert not media.looks_equirect(b)
+
+
+def test_dual_fisheye_round_trip():
+    eq, _, _ = synthetic.make_equirect_pair(w=2048)
+    df = synthetic.equirect_to_dual_fisheye(eq, 1024)
+    back = media.dual_fisheye_to_equirect(df, out_w=2048)
+    band = slice(256, 768)  # away from the poles
+    err = np.abs(back[band].astype(int) - eq[band].astype(int)).mean()
+    assert err < 12, err
+
+
+def test_insp_pair_compares_perspective_crops(tmp_path):
+    b, a, _ = synthetic.make_dual_fisheye_pair(size=1024)
+    pb, pa = tmp_path / "IMG_20261114_091200_00_001.insp", tmp_path / "IMG_20261114_154700_00_002.insp"
+    cv2.imwrite(str(tmp_path / "b.jpg"), b)
+    cv2.imwrite(str(tmp_path / "a.jpg"), a)
+    (tmp_path / "b.jpg").rename(pb)
+    (tmp_path / "a.jpg").rename(pa)
+    r = pipeline.analyze(pb, pa, tmp_path / "out")
+    assert r["mode"] == "360" and r["projection"] == "dual-fisheye"
+    assert r["yaw_offset"]["deg"] == pytest.approx(37.0, abs=2.0)
+    by_view = {v["name"]: len(v["changes"]) for v in r["views"]}
+    assert by_view["360 right (90°)"] >= 1 and by_view["360 left (270°)"] >= 1
+    assert all(v["alignment"]["ok"] for v in r["views"])
+
+
+def test_insv_video_loads(tmp_path):
+    b, _, _ = synthetic.make_dual_fisheye_pair(size=512)
+    mp4 = tmp_path / "VID.mp4"
+    vw = cv2.VideoWriter(str(mp4), cv2.VideoWriter_fourcc(*"avc1"), 30, (1024, 512))
+    if not vw.isOpened():
+        pytest.skip("no avc1 encoder")
+    for _ in range(15):
+        vw.write(b)
+    vw.release()
+    insv = tmp_path / "VID_20261114_091200_00_003.insv"
+    mp4.rename(insv)
+    assert media.kind_of(insv) == "video"
+    frames = media.sample_video(insv, n=3, max_dim=None)
+    assert frames[0][1].shape == (512, 1024, 3) and media.looks_dual_fisheye(frames[0][1])
+
+
+def test_insp_that_is_not_dual_fisheye_is_rejected(tmp_path, flat_pair):
+    before, _, _ = flat_pair
+    p = tmp_path / "odd.insp"
+    cv2.imwrite(str(tmp_path / "x.jpg"), before)
+    (tmp_path / "x.jpg").rename(p)
+    with pytest.raises(media.MediaError, match="iPhone/GoPro"):
+        pipeline.analyze(p, p, tmp_path / "out")

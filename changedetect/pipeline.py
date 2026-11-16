@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import secrets
 import time
 from dataclasses import dataclass
@@ -96,8 +97,29 @@ def analyze(before_path: Path, after_path: Path, out_root: Path, opts: Options |
     else:
         img_b, img_a = frames_b[0][1], frames_a[0][1]
 
-    is360 = opts.mode360 == "on" or (
+    projection = "flat"
+    tagged = [Path(p).suffix.lower() in media.DUAL_FISHEYE_EXT for p in (before_path, after_path)]
+    dual = [media.looks_dual_fisheye(img_b), media.looks_dual_fisheye(img_a)]
+    if opts.mode360 != "off" and (any(tagged) or all(dual)):
+        for is_tagged, is_dual, img, m in ((tagged[0], dual[0], img_b, meta_b), (tagged[1], dual[1], img_a, meta_a)):
+            if is_tagged and not is_dual and not media.looks_equirect(img, m):
+                raise media.MediaError(
+                    f"{m.name} does not look like a side-by-side dual-fisheye Insta360 frame "
+                    f"({img.shape[1]}x{img.shape[0]}). Export an equirectangular image from the Insta360 app, "
+                    "or use the iPhone/GoPro for this comparison.")
+        if dual[0] != dual[1]:
+            raise media.MediaError("One input is dual-fisheye (Insta360) and the other is not: compare images "
+                                   "from the same camera, or export both as equirectangular.")
+        if all(dual):
+            fov = float(os.environ.get("FISHEYE_FOV_DEG") or media.DEFAULT_FISHEYE_FOV)
+            ow = min(img_b.shape[1], opts.max_dim_360 or img_b.shape[1])
+            img_b = media.dual_fisheye_to_equirect(img_b, fov, ow)
+            img_a = media.dual_fisheye_to_equirect(img_a, fov, ow)
+            projection = "dual-fisheye"
+    is360 = projection == "dual-fisheye" or opts.mode360 == "on" or (
         opts.mode360 == "auto" and media.looks_equirect(img_b, meta_b) and media.looks_equirect(img_a, meta_a))
+    if is360 and projection == "flat":
+        projection = "equirectangular"
     pairs: list[tuple[str, np.ndarray, np.ndarray]] = []
     yaw_offset = None
     if is360:
@@ -181,6 +203,7 @@ def analyze(before_path: Path, after_path: Path, out_root: Path, opts: Options |
         "id": rid,
         "created": datetime.now().isoformat(timespec="seconds"),
         "mode": "360" if is360 else "flat",
+        "projection": projection,
         "inputs": {"before": meta_b.to_dict(), "after": meta_a.to_dict()},
         "video": video_info,
         "yaw_offset": yaw_offset,
