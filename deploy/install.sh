@@ -47,6 +47,12 @@ fi
 
 echo "[5/6] Data dir and config"
 mkdir -p "$DATA_DIR"/{reports,uploads,samples,models}
+echo "    model weights for offline use"
+# YOLO is optional: a ready yolo11n.onnx in the repo's models/ (exported on a Mac with
+# python -m changedetect.prefetch --export-onnx) or YOLO_ONNX_URL in the env file is copied in.
+( cd "$APP_DIR"; set -a; [ -f "$ENV_FILE" ] && . "$ENV_FILE"; set +a
+  "$APP_DIR/.venv/bin/python" -m changedetect.prefetch --data-dir "$DATA_DIR" \
+      --from "$SRC_DIR/models" --from "$DATA_DIR/models" ) || echo "    WARNING: model prefetch failed (YOLO labels may be off)"
 chown -R "$SVC_USER:$SVC_USER" "$DATA_DIR"
 if [ ! -f "$ENV_FILE" ]; then
     install -m 600 -o root -g root "$SRC_DIR/deploy/$APP.env.example" "$ENV_FILE"
@@ -72,5 +78,5 @@ cat <<MSG
   Logs:      journalctl -u $APP -f
   Config:    $ENV_FILE
   Reports:   $DATA_DIR/reports
-  YOLO:      optional, copy yolo11n.onnx to $DATA_DIR/models/ (see README)
+  YOLO:      optional: put yolo11n.onnx in the repo's models/ and re-run, or see README
 MSG

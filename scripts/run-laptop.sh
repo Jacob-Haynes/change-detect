@@ -4,6 +4,10 @@
 # Runs in the foreground on 0.0.0.0:${WEB_PORT:-8130} until SIGTERM/SIGINT, then exits cleanly
 # (publishes a retained "stopped" heartbeat).
 # Usage: scripts/run-laptop.sh [--simulate] [extra changedetect args]
+#        scripts/run-laptop.sh --setup-only [--export-onnx]
+#   --setup-only: install dependencies, download every model needed offline (YOLO weights, and the
+#   Ollama VLM when it runs on this Mac), then exit. Run it once while online, before the hotspot.
+#   --export-onnx (with --setup-only): also write yolo11n.onnx for the Pi.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$(pwd)"
@@ -24,6 +28,12 @@ export CHANGE_DETECT_DATA_DIR="${CHANGE_DETECT_DATA_DIR:-$HOME/change-detect-dat
 export PYTHONUNBUFFERED=1
 
 log() { echo "[change-detect] $*" >&2; }
+
+SETUP_ONLY=0
+ARGS=()
+for a in "$@"; do
+    if [ "$a" = "--setup-only" ]; then SETUP_ONLY=1; else ARGS+=("$a"); fi
+done
 
 if [ ! -x "$VENV/bin/python" ]; then
     log "creating $VENV"
@@ -50,6 +60,24 @@ if [ ! -f "$STAMP" ]; then
     touch "$STAMP"
 fi
 
+if [ "$SETUP_ONLY" = 1 ]; then
+    "$VENV/bin/python" -m changedetect.prefetch --data-dir "$CHANGE_DETECT_DATA_DIR" ${ARGS[@]+"${ARGS[@]}"}
+    if [ "${VLM_BACKEND:-auto}" != "off" ]; then
+        case "$VLM_URL" in
+            *://localhost*|*://127.0.0.1*)
+                if command -v ollama >/dev/null 2>&1; then
+                    log "pulling VLM $VLM_MODEL with Ollama (several GB the first time)"
+                    ollama pull "$VLM_MODEL" || log "WARNING: 'ollama pull $VLM_MODEL' failed; AI suggestions will be off offline"
+                else
+                    log "Ollama not installed: AI suggestions need it (brew install ollama; ollama pull $VLM_MODEL)"
+                fi ;;
+            *) log "VLM is remote ($VLM_URL): run 'ollama pull $VLM_MODEL' on that host" ;;
+        esac
+    fi
+    log "setup done; models are in $CHANGE_DETECT_DATA_DIR/models"
+    exit 0
+fi
+
 [ -n "$MQTT_PASS" ] || log "WARNING: MQTT_PASS is empty; heartbeat/mesh to $MQTT_HOST will be refused"
 if [ "${VLM_BACKEND:-auto}" != "off" ] && command -v curl >/dev/null 2>&1; then
     if curl -fsS -m 2 "${VLM_URL%/}/v1/models" >/dev/null 2>&1; then
@@ -65,4 +93,4 @@ log "TAK $TAK_HOST:$TAK_PORT | MQTT $MQTT_USER@$MQTT_HOST:$MQTT_PORT | port $WEB
 if [ "$(uname)" = "Darwin" ] && command -v caffeinate >/dev/null 2>&1; then
     caffeinate -is -w $$ &
 fi
-exec "$VENV/bin/python" -m changedetect --host 0.0.0.0 --port "$WEB_PORT" --profile "$CHANGE_DETECT_PROFILE" "$@"
+exec "$VENV/bin/python" -m changedetect --host 0.0.0.0 --port "$WEB_PORT" --profile "$CHANGE_DETECT_PROFILE" ${ARGS[@]+"${ARGS[@]}"}

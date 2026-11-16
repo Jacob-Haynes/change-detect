@@ -21,7 +21,8 @@ from changedetect.config import Settings
 from changedetect.gemini import GeminiAdvisor
 from changedetect.heartbeat import Heartbeat
 from changedetect.labeler import detect_accelerator, make_labeler
-from changedetect.mesh import MeshBus
+from changedetect.config import parse_position
+from changedetect.mesh import MeshBus, label_simulated
 from changedetect.vlm import AdvisorChain, OpenAICompatAdvisor
 
 logger = logging.getLogger(__name__)
@@ -122,6 +123,8 @@ def create_app(settings: Settings) -> FastAPI:
             "heartbeat": svc.heartbeat.status(),
             "tak": svc.cot.status(),
             "mesh": svc.mesh.status(),
+            "sensor": ({"lat": settings.sensor_position[0], "lon": settings.sensor_position[1]}
+                       if settings.sensor_position else None),
             "busy": svc.lock.locked(),
         }
 
@@ -200,6 +203,9 @@ def create_app(settings: Settings) -> FastAPI:
                 result = await run_in_threadpool(run)
             except media.MediaError as e:
                 raise HTTPException(400, str(e))
+            if sample and not result.get("synthetic"):
+                result["synthetic"] = True
+                pipeline.save_result(settings.reports_dir / result["id"], result)
             # Keep the original files with the result for the record (originals keep their EXIF)
             out = settings.reports_dir / result["id"]
             for p, tag in ((bpath, "before"), (apath, "after")):
@@ -242,29 +248,53 @@ def create_app(settings: Settings) -> FastAPI:
         _, result = _load(rid)
         manual = req.lat is not None or req.lon is not None
         if manual:
-            if req.lat is None or req.lon is None or not (-90 <= req.lat <= 90) or not (-180 <= req.lon <= 180):
-                raise HTTPException(400, "enter a valid latitude and longitude")
-            lat, lon = req.lat, req.lon
+            pos = parse_position(req.lat, req.lon)
+            if pos is None:
+                raise HTTPException(400, "enter a valid latitude and longitude (0,0 is not accepted)")
+            lat, lon = pos
+            source = "manual entry"
         elif result.get("gps"):
             lat, lon = result["gps"]["lat"], result["gps"]["lon"]
+            source = result["gps"]["source"]
+        elif settings.sensor_position:
+            lat, lon = settings.sensor_position
+            source = "SENSOR_LAT/SENSOR_LON (OP position)"
         else:
-            raise HTTPException(400, "no GPS in these images; enter lat/lon manually")
+            raise HTTPException(400, "no GPS in these images and SENSOR_LAT/SENSOR_LON is not set; "
+                                     "enter lat/lon manually")
         if not result["alignment_ok"]:
             raise HTTPException(409, "alignment failed; refusing to report a change")
+        uid = f"CHANGE-{result['id']}"
+        wait = svc.cot.retry_in(uid)
+        if wait > 0:
+            raise HTTPException(429, f"marker for this result was just sent; wait {wait:.0f} s")
         callsign = req.callsign or f"CHANGE {result['id'][-4:]} ({result['changes_total']})"
         remarks = f"Change detected: {result['summary']} [change-detect {result['id']}; position from " \
-                  f"{'manual entry' if manual else result['gps']['source']}; camera position, not the change itself]"
-        xml = cot.build_change_cot(f"CHANGE-{result['id']}", lat, lon, callsign, remarks, manual=manual)
-        state = svc.cot.send(xml)
-        return {"state": state, "tak": svc.cot.status(), "lat": lat, "lon": lon}
+                  f"{source}; camera position, not the change itself]"
+        if result.get("synthetic"):
+            remarks = "SIMULATED: " + remarks
+        xml = cot.build_change_cot(uid, lat, lon, callsign, remarks, manual=manual)
+        state = svc.cot.send(xml, uid=uid)
+        if state == "rate_limited":
+            raise HTTPException(429, "marker for this result was just sent; wait a few seconds")
+        return {"state": state, "tak": svc.cot.status(), "lat": lat, "lon": lon, "position_source": source,
+                "simulated": bool(result.get("synthetic"))}
 
     @app.post("/api/results/{rid}/mesh")
     async def push_mesh(rid: str, req: MeshRequest):
         _, result = _load(rid)
         text = req.text or f"CHANGE {result['id'][-4:]}: {result['summary']}"
-        if result.get("gps") and not req.text:
-            text += f" @{result['gps']['lat']:.5f},{result['gps']['lon']:.5f}"
+        if not req.text:
+            pos = (result["gps"]["lat"], result["gps"]["lon"]) if result.get("gps") else settings.sensor_position
+            if pos:
+                text += f" @{pos[0]:.5f},{pos[1]:.5f}"
+        text = label_simulated(text, bool(result.get("synthetic")))
+        wait = svc.mesh.retry_in()
+        if svc.mesh.enabled and wait > 0:
+            raise HTTPException(429, f"mesh is limited to one text every 30 s; try again in {wait:.0f} s")
         ok = await run_in_threadpool(svc.mesh.send, text, req.to)
+        if not ok and svc.mesh.last_note:
+            raise HTTPException(429, svc.mesh.last_note)
         return {"sent": ok, "error": svc.mesh.last_error, "text": text[:200]}
 
     # ------------------------------------------------------------ folder / SD-card batches

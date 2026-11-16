@@ -100,6 +100,7 @@
       <label>360 equirectangular</label>
       <select id="m360"><option value="auto">Auto-detect</option><option value="on">Force 360</option><option value="off">Treat as flat</option></select>
       <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="yolo" checked> Label with YOLO (if model installed)</label>
+      <div id="yolo-note" class="muted" hidden style="color:#e0a030"></div>
       <div style="margin-top:10px" class="row"><button id="run">Analyse uploads <span class="spinner">…</span></button></div>
       <div id="msg" class="muted"></div>
     </div>
@@ -193,8 +194,12 @@ async function refreshStatus() {
     $('b-ai').title = (ai.local.error || '') + (ai.gemini.last_error ? ' | ' + ai.gemini.last_error : '');
     badge('b-mode', `${status.profile.toUpperCase()} · ${status.accelerator.toUpperCase()}${status.max_dim ? ' · ' + status.max_dim + 'px' : ' · full-res'}`, '');
     $('b-mode').title = 'Heartbeat: ' + (status.heartbeat.connected ? 'publishing' : (status.heartbeat.last_error || 'broker not connected'));
-    badge('b-yolo', status.yolo.enabled ? 'YOLO: on (' + status.yolo.device + ')' : (status.yolo.error === 'loading' ? 'YOLO: loading…' : 'YOLO: off'), status.yolo.enabled ? 'on' : '');
-    $('b-yolo').title = status.yolo.error || status.yolo.model || '';
+    const ye = status.yolo.error || '';
+    const yBusy = ye === 'loading' || ye.startsWith('downloading');
+    badge('b-yolo', status.yolo.enabled ? 'YOLO: on (' + status.yolo.device + ')' : (ye === 'loading' ? 'YOLO: loading…' : yBusy ? 'YOLO: downloading…' : ye.startsWith('disabled') ? 'YOLO: off' : 'YOLO: model missing'), status.yolo.enabled ? 'on' : (yBusy || ye.startsWith('disabled') ? '' : 'bad'));
+    $('b-yolo').title = ye || status.yolo.model || '';
+    $('yolo-note').hidden = status.yolo.enabled || ye === 'loading' || ye.startsWith('disabled');
+    $('yolo-note').textContent = yBusy ? 'YOLO: ' + ye + '… (changes are still detected; labels come once it loads)' : 'YOLO: ' + ye;
     const t = status.tak;
     if (!t.enabled) badge('b-tak', 'TAK: disabled', '');
     else if (t.connected) badge('b-tak', 'TAK: connected', 'on');
@@ -308,7 +313,9 @@ function show(r) {
     el('a', { class: 'btnlink', href: url(r.report.pdf), target: '_blank', text: 'Report PDF' }),
     el('span', { class: 'muted', text: 'Saved under ' + ((status && status.reports_dir) || 'reports') + '/' + r.id }));
   if (r.gps) { $('lat').value = r.gps.lat; $('lon').value = r.gps.lon; $('gpsnote').textContent = `From ${r.gps.source} (camera position, not the exact change position). Edit to override.`; }
+  else if (status && status.sensor) { $('lat').value = status.sensor.lat; $('lon').value = status.sensor.lon; $('gpsnote').textContent = 'No GPS in these files: using the OP position (SENSOR_LAT/SENSOR_LON). Edit to override.'; }
   else { $('lat').value = ''; $('lon').value = ''; $('gpsnote').textContent = 'No GPS in these files: enter the position manually to push to ATAK.'; }
+  if (r.synthetic) $('gpsnote').textContent += ' Synthetic sample: ATAK remarks start "SIMULATED:" and mesh texts start "[SIM]".';
   $('cot').disabled = !r.alignment_ok;
   $('share-msg').textContent = '';
 }
@@ -377,7 +384,8 @@ $('cot').onclick = async () => {
   const body = {};
   const lat = parseFloat($('lat').value), lon = parseFloat($('lon').value);
   const fromGps = result.gps && lat === result.gps.lat && lon === result.gps.lon;
-  if (!fromGps && !isNaN(lat) && !isNaN(lon)) { body.lat = lat; body.lon = lon; }
+  const fromSensor = !result.gps && status && status.sensor && lat === status.sensor.lat && lon === status.sensor.lon;
+  if (!fromGps && !fromSensor && !isNaN(lat) && !isNaN(lon)) { body.lat = lat; body.lon = lon; }
   const r = await fetch(`/api/results/${result.id}/cot`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const j = await r.json();
   $('share-msg').textContent = r.ok ? `CoT marker ${j.state} for ${j.lat.toFixed(5)}, ${j.lon.toFixed(5)}${j.tak.connected ? '' : ' (TAK server not connected yet; will retry)'}` : 'ATAK: ' + j.detail;
@@ -386,7 +394,7 @@ $('cot').onclick = async () => {
 $('mesh').onclick = async () => {
   const r = await fetch(`/api/results/${result.id}/mesh`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
   const j = await r.json();
-  $('share-msg').textContent = j.sent ? 'Mesh text queued: ' + j.text : 'Mesh: ' + (j.error || 'not sent');
+  $('share-msg').textContent = j.sent ? 'Mesh text queued: ' + j.text : 'Mesh: ' + (j.detail || j.error || 'not sent');
   refreshStatus();
 };
 

@@ -26,6 +26,20 @@ PROFILES = {
 }
 
 
+def parse_position(lat: str | float | None, lon: str | float | None) -> tuple[float, float] | None:
+    """A usable lat/lon pair, or None. 0,0 (and anything out of range or unparsable) is treated as
+    unset, so a missing position can never be emitted as 0,0 (contract C4.2)."""
+    try:
+        la, lo = float(lat), float(lon)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if not (-90 <= la <= 90 and -180 <= lo <= 180) or (la == 0 and lo == 0):
+        return None
+    if la != la or lo != lo:  # NaN
+        return None
+    return la, lo
+
+
 def _env(name: str, default: str | None = None) -> str | None:
     value = os.environ.get(name)
     return value if value not in (None, "") else default
@@ -64,6 +78,7 @@ class Settings:
     public_url: str | None = None
     heartbeat_enabled: bool = True
     max_upload_mb: int = 1024
+    sensor_position: tuple[float, float] | None = None  # SENSOR_LAT/SENSOR_LON (OP position)
 
     @classmethod
     def from_env(cls, data_dir: str | Path | None = None, simulate: bool = False,
@@ -98,6 +113,7 @@ class Settings:
             profile=(profile or _env("CHANGE_DETECT_PROFILE", "pi")),
             port=int(_env("WEB_PORT", str(DEFAULT_PORT))),
             public_url=_env("PUBLIC_URL"),
+            sensor_position=parse_position(_env("SENSOR_LAT"), _env("SENSOR_LON")),
             heartbeat_enabled=_env("HEARTBEAT", "1") not in ("0", "false", "no"),
             max_upload_mb=int(_env("MAX_UPLOAD_MB", "1024")),
         )

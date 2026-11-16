@@ -213,6 +213,8 @@ def analyze(before_path: Path, after_path: Path, out_root: Path, opts: Options |
         "changes_total": len(all_changes),
         "alignment_ok": any(v["alignment"]["ok"] for v in views),
         "gps": gps,
+        # the bundled synthetic samples carry EXIF Make "SYNTHETIC" (contract C4.3 labelling)
+        "synthetic": any((m.make or "").upper() == "SYNTHETIC" for m in (meta_b, meta_a)),
         "summary": _summary(all_changes, views),
         "elapsed_s": None,
     }

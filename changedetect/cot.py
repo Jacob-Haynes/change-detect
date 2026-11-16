@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 COT_TYPE = "a-u-G"  # unknown ground point: a change, not an identification
 STALE_SECONDS = 6 * 3600
 MAX_PENDING = 50
+MIN_INTERVAL_PER_UID_S = 5.0  # contract C4.4: at most one event per uid every 5 s
 
 
 def _iso(ts: float) -> str:
@@ -52,6 +53,7 @@ class CotSender:
         self._backoff = 1.0
         self._stop = False
         self._thread: threading.Thread | None = None
+        self._last_by_uid: dict[str, float] = {}
 
     def start(self) -> None:
         if self.enabled and self._thread is None:
@@ -64,14 +66,26 @@ class CotSender:
             self._cv.notify_all()
         self._close()
 
-    def send(self, xml: str) -> str:
-        """Queue a CoT event. Returns 'queued' or 'disabled'."""
+    def retry_in(self, uid: str, now: float | None = None) -> float:
+        """Seconds until another event for this uid is allowed (0 = now)."""
+        last = self._last_by_uid.get(uid)
+        if last is None:
+            return 0.0
+        now = time.monotonic() if now is None else now
+        return max(0.0, MIN_INTERVAL_PER_UID_S - (now - last))
+
+    def send(self, xml: str, uid: str | None = None) -> str:
+        """Queue a CoT event. Returns 'queued', 'disabled' or 'rate_limited' (same uid within 5 s)."""
         if not self.enabled:
             return "disabled"
-        self.start()
         with self._cv:
+            if uid is not None:
+                if self.retry_in(uid) > 0:
+                    return "rate_limited"
+                self._last_by_uid[uid] = time.monotonic()
             self._q.append(xml)
             self._cv.notify_all()
+        self.start()
         return "queued"
 
     def status(self) -> dict:

@@ -85,7 +85,9 @@ class Labeler:
                 self.error = f"could not load {Path(model_path).name}: {e}"
                 logger.warning("YOLO disabled: %s", self.error)
         else:
-            self.error = "no model file"
+            self.error = (f"no model file {Path(model_path).name if model_path else ''} in models/: YOLO labels off. "
+                          "Export yolo11n.onnx on a Mac (python -m changedetect.prefetch --export-onnx) and copy it "
+                          "to the Pi's models/ dir, then re-run deploy/install.sh").replace("  ", " ")
 
     device = "cpu"
 
@@ -152,6 +154,16 @@ def detect_accelerator() -> str:
     return "cpu"
 
 
+def internet_reachable(host: str = "github.com", port: int = 443, timeout: float = 2.0) -> bool:
+    """Quick check before trying a weights download, so offline starts fail fast and clearly."""
+    import socket
+    try:
+        socket.create_connection((host, port), timeout=timeout).close()
+        return True
+    except OSError:
+        return False
+
+
 def default_weights(device: str) -> str:
     # bigger model when a GPU is present; nano on CPU
     return "yolo11m.pt" if device in ("cuda", "mps") else "yolo11n.pt"
@@ -171,9 +183,21 @@ class UltralyticsLabeler:
 
     def _load(self):
         try:
-            from ultralytics import YOLO
             self.model_path.parent.mkdir(parents=True, exist_ok=True)
-            # downloads the weights into models/ on first run (needs internet once)
+            if not self.model_path.exists():
+                fallback = self.model_path.parent / "yolo11n.pt"
+                if self.model_path.name != fallback.name and fallback.exists():
+                    logger.warning("YOLO %s not downloaded; using %s", self.model_path.name, fallback.name)
+                    self.weights, self.model_path, self.imgsz = fallback.name, fallback, 640
+                elif not internet_reachable():
+                    self.error = (f"model {self.model_path.name} is not downloaded and there is no internet: "
+                                  "YOLO labels off. Run scripts/run-laptop.sh --setup-only while online.")
+                    logger.warning("YOLO disabled: %s", self.error)
+                    return
+                else:
+                    self.error = f"downloading {self.model_path.name}"
+                    logger.info("YOLO: %s (run --setup-only beforehand to avoid this)", self.error)
+            from ultralytics import YOLO
             self.model = YOLO(str(self.model_path))
             self.model.to(self.device)
             self.error = None

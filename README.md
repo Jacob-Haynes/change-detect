@@ -45,8 +45,13 @@ Raspberry Pi 5 CPU (OpenCV, no AI accelerator) with a web UI on **port 8130**.
    OpenAI-compatible endpoint first (Ollama on the HQ Mac, `qwen3-vl:8b`, offline), then Gemini
    if `GEMINI_API_KEY` is set, otherwise off. `openai_compat`, `gemini` or `off` forces one backend.
 8. **Optional ATAK**: pushes a CoT "change detected" marker (`a-u-G`, unknown ground) with the
-   summary, using EXIF GPS or a manually entered lat/lon. **Mesh**: sends a short summary text over
-   the Meshtastic mesh via the blufor-tracker bridge.
+   summary. The position is a manually entered lat/lon, else EXIF GPS, else the OP position
+   `SENSOR_LAT`/`SENSOR_LON`. With none of these the marker is refused: it is never sent at 0,0.
+   **Mesh**: sends a short summary text over the Meshtastic mesh via the blufor-tracker bridge.
+   - Results from the bundled synthetic samples are labelled: CoT remarks start `SIMULATED: ` and
+     mesh texts start `[SIM] `. Your own imagery carries no prefix.
+   - Rate limits: at most one mesh text every 30 s, and one CoT event per marker uid every 5 s.
+     The UI says when to try again.
 
 The header always shows which modes are active: `SIMULATE`, profile and accelerator
 (`PI · CPU · 1600px`, `LAPTOP · MPS · full-res`), the AI suggestion source (local VLM, Gemini
@@ -55,6 +60,7 @@ cloud, or off), YOLO on/off and its device, TAK connection, and mesh state.
 Every 10 s it publishes a retained heartbeat to `isrkit/heartbeat/change-detect`, so the Pi
 launcher can link to it wherever it runs. The payload is
 `{"tool":"change-detect","host":"isr-hq","url":"http://isr-hq.local:8130/","mode":"mps","status":"ok","ts":…}`.
+- `host` is `ISR_HOST` if set, else the lowercased short hostname.
 - `mode` is `cpu`, `mps`, `cuda` or `simulate`.
 - `status` is `ok`, or `degraded` when ATAK markers are stuck in the queue or a mesh send failed.
 - On a clean exit (SIGTERM) it publishes a retained `stopped`. If the process dies uncleanly, the
@@ -92,6 +98,9 @@ belong to the pi-platform repo, not this one.
 | `YOLO_WEIGHTS` | `yolo11m.pt` on MPS/CUDA, `yolo11n.pt` on CPU | Ultralytics weights for the laptop path. |
 | `CHANGE_DETECT_PROFILE` | `pi` | `pi` downscales stills to 1600 px. `laptop` keeps full resolution. |
 | `HEARTBEAT` / `PUBLIC_URL` | `1` / auto | Heartbeat on/off, and the URL it advertises. |
+| `ISR_HOST` | short hostname | The heartbeat `host` name (and the `<host>.local` URL). |
+| `SENSOR_LAT` / `SENSOR_LON` | unset | OP position, used for ATAK/mesh when images have no GPS. `0,0` counts as unset. |
+| `YOLO_ONNX_URL` | unset | Where `deploy/install.sh` downloads `yolo11n.onnx` from, if it isn't in the repo's `models/`. |
 | `CHANGE_DETECT_ARGS` | empty | e.g. `--simulate` or `--no-cot`. |
 
 ### Optional: YOLO nano labels
@@ -100,11 +109,16 @@ YOLO is not bundled: the weights come under Ultralytics' AGPL-3.0 licence, and t
 PyTorch. On a laptop with internet access:
 
 ```bash
-pip install ultralytics
-yolo export model=yolo11n.pt format=onnx opset=12 imgsz=640
-scp yolo11n.onnx pi@<pi>:/tmp/ && ssh pi@<pi> 'sudo install -o changedetect -m 644 /tmp/yolo11n.onnx /var/lib/change-detect/models/'
-sudo systemctl restart change-detect
+# on the Mac, while online
+scripts/run-laptop.sh --setup-only --export-onnx    # writes ~/change-detect-data/models/yolo11n.onnx
+# copy it into the Pi's checkout, then (re-)run the installer, which copies it into place
+scp ~/change-detect-data/models/yolo11n.onnx pi@isr-pi.local:change-detect/models/
+ssh pi@isr-pi.local 'sudo change-detect/deploy/install.sh && sudo systemctl restart change-detect'
 ```
+
+`deploy/install.sh` runs `python -m changedetect.prefetch`. That copies a `yolo11n.onnx` from the
+repo's `models/` dir (or downloads `YOLO_ONNX_URL`) and reports any model that is missing. If the
+model is missing, the UI shows "YOLO: model missing" and analysis carries on without labels.
 
 COCO classes are trained on ground-level photos. Expect good results on GoPro and phone shots,
 and poor results on top-down drone imagery from height.
@@ -124,6 +138,9 @@ runs Ollama) as the analysis station. The Mac joins the Pi's hotspot.
 `laptop/start-mac.sh` sources `~/.config/isr-kit/station.env` and then calls it; see
 `deploy/station.env.example` for the keys. The script:
 - creates `.venv-laptop` on first run and installs `requirements-desktop.txt`, which includes PyTorch;
+- with `--setup-only`, downloads every model needed offline and exits: the YOLO weights
+  (yolo11m and yolo11n), and `ollama pull $VLM_MODEL` when Ollama runs on this Mac.
+  **Run it once while online, before joining the hotspot.**
 - binds `0.0.0.0:8130` and runs in the foreground;
 - exits 0 on SIGTERM or Ctrl+C, after publishing a retained `stopped` heartbeat;
 - keeps the Mac awake while it runs.
@@ -134,6 +151,7 @@ Defaults when a variable is unset: `TAK_HOST=isr-pi.local`, `TAK_PORT=8087`,
 
 ```bash
 git clone <this repo> && cd change-detect
+scripts/run-laptop.sh --setup-only                     # once, while online
 MQTT_PASS=<isrkit password> scripts/run-laptop.sh      # or via the platform's laptop/start-mac.sh
 open http://isr-hq.local:8130/
 ```
@@ -141,8 +159,11 @@ open http://isr-hq.local:8130/
 - **Laptop profile.** Stills stay at **full resolution**: GoPro 27 MP, 360 at 5.7K+, 4K drone
   frames. Alignment runs on a 2000 px copy and is rescaled, so it stays fast.
 - **YOLO on the laptop** uses PyTorch with the accelerator chosen automatically (CUDA, then Apple
-  MPS, then CPU). It runs **yolo11m** on a GPU/MPS and yolo11n on CPU. The weights download once
-  into `~/change-detect-data/models/`, so do that while you have internet.
+  MPS, then CPU). It runs **yolo11m** on a GPU/MPS and yolo11n on CPU. `--setup-only` puts the
+  weights in `~/change-detect-data/models/`.
+  - If yolo11m is missing, the app falls back to yolo11n when that is present.
+  - Offline with no weights at all, the UI says "YOLO: model missing" and labels are off; it does not hang.
+  - Online with weights missing, it downloads them in the background.
 - **Offline AI suggestions:** install [Ollama](https://ollama.com) on the HQ Mac and run
   `ollama pull qwen3-vl:8b` (about 6 GB, fine on 64 GB). Leave `VLM_BACKEND=auto`: suggestions then
   stay on the Mac, and the UI shows "local VLM (qwen3-vl:8b)". If Ollama isn't running and

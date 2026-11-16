@@ -1,7 +1,7 @@
 """Retained heartbeat on isrkit/heartbeat/change-detect every 10 s, so the Pi launcher can show this
 tool wherever it runs (isr-pi or isr-hq). Broker down = log and keep retrying; never fatal.
 
-Payload: {"tool", "host" (short hostname), "url" (http://<host>.local:<port>/), "mode", "status", "ts"}
+Payload: {"tool", "host" (ISR_HOST, else short hostname), "url" (http://<host>.local:<port>/), "mode", "status", "ts"}
 status is ok | degraded | error while running; "stopped" (retained) after a clean exit; the MQTT
 last-will publishes "error" if the process dies without saying goodbye."""
 
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import socket
 import threading
 import time
@@ -22,6 +23,10 @@ INTERVAL_S = 10
 
 
 def short_hostname() -> str:
+    """ISR_HOST if set (contract C4.1), else the lowercased short socket.gethostname()."""
+    env = (os.environ.get("ISR_HOST") or "").strip()
+    if env:
+        return env
     return socket.gethostname().split(".")[0].lower() or "localhost"
 
 
