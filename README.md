@@ -270,4 +270,4 @@ change-detect and OpenTAKServer, with ATAK on a phone.
 
 ## License
 
-MIT, see [LICENSE](LICENSE). The optional YOLO weights are not included and come under Ultralytics' AGPL-3.0 licence.
+Copyright (C) 2026 Jacob Haynes. Licensed under the GNU AGPL v3 (see [LICENSE](LICENSE)). Uses Ultralytics YOLO (AGPL-3.0); model weights are subject to Ultralytics' licence.
