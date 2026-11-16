@@ -11,10 +11,10 @@ import logging
 logger = logging.getLogger(__name__)
 
 PROMPT = (
-    "You are helping a military ISR training exercise compare two photos of the same small area, "
+    "You are helping an imagery change-detection demo compare two photos of the same small area, "
     "taken at different times and already aligned. Image 1 is BEFORE, image 2 is AFTER. "
     "An automatic detector flagged a change near the centre. In ONE line of at most 20 words, say "
-    "what most likely changed (e.g. 'vehicle has left', 'new camouflaged shelter', 'ground dug or "
+    "what most likely changed (e.g. 'vehicle has left', 'new shelter or structure', 'ground dug or "
     "disturbed', 'shadow/lighting only'). If it looks like no real change, say so. No preamble."
 )
 

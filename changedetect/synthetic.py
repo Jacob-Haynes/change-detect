@@ -1,7 +1,7 @@
 """Synthetic before/after pairs for --simulate mode and tests.
 
 Draws a textured overhead scene (fields, track, buildings, trees, a car), then makes an
-AFTER version where the car has moved, a camouflaged hide has appeared and a patch of
+AFTER version where the car has moved, a covered shelter has appeared and a patch of
 ground has been disturbed. Both are rendered from slightly different viewpoints and the
 AFTER image gets different lighting and noise, like two real passes over the same area.
 """
@@ -17,8 +17,8 @@ from PIL import Image
 
 SCENE_W, SCENE_H = 1800, 1350
 OUT_W, OUT_H = 1440, 1080
-# Approximate position for the demo marker (Salisbury Plain training area)
-DEMO_LAT, DEMO_LON = 51.2146, -1.8079
+# Arbitrary public landmark used as the demo marker position (Royal Observatory, Greenwich)
+DEMO_LAT, DEMO_LON = 51.4779, -0.0015
 
 
 def _noise(h, w, rng, octaves=(4, 8, 16, 48, 128, 384)):
@@ -145,7 +145,7 @@ def make_pair(seed: int = 7):
     truth = [
         {"what": "vehicle gone", "box": box_in_before(car_a, (40, 32))},
         {"what": "vehicle appeared", "box": box_in_before(car_b, (40, 32))},
-        {"what": "new hide", "box": box_in_before(hide_c, (58, 42))},
+        {"what": "new shelter", "box": box_in_before(hide_c, (58, 42))},
         {"what": "disturbed ground", "box": box_in_before(dig_c, (46, 31))},
     ]
     return before, after, truth

@@ -51,9 +51,9 @@ def test_parse_position_rejects_zero_and_junk():
 
 
 def test_sensor_position_from_env(monkeypatch, tmp_path):
-    monkeypatch.setenv("SENSOR_LAT", "51.1789")
-    monkeypatch.setenv("SENSOR_LON", "-1.8262")
-    assert Settings.from_env(tmp_path).sensor_position == (51.1789, -1.8262)
+    monkeypatch.setenv("SENSOR_LAT", "51.5007")
+    monkeypatch.setenv("SENSOR_LON", "-0.1246")
+    assert Settings.from_env(tmp_path).sensor_position == (51.5007, -0.1246)
     monkeypatch.setenv("SENSOR_LAT", "0")
     monkeypatch.setenv("SENSOR_LON", "0")
     assert Settings.from_env(tmp_path).sensor_position is None
@@ -132,24 +132,24 @@ def test_synthetic_sample_is_labelled_simulated(tmp_path):
 
 
 def test_real_upload_unlabelled_and_uses_sensor_position(tmp_path, flat_pair):
-    c, cots, texts = _app(tmp_path, sensor=(51.1789, -1.8262))
+    c, cots, texts = _app(tmp_path, sensor=(51.5007, -0.1246))
     before, after, _ = flat_pair
     enc = lambda im: io.BytesIO(cv2.imencode(".png", im)[1].tobytes())
     res = c.post("/api/analyze", files={"before": ("b.png", enc(before), "image/png"),
                                         "after": ("a.png", enc(after), "image/png")}).json()
     assert res["synthetic"] is False and res["gps"] is None
-    assert c.get("/api/status").json()["sensor"] == {"lat": 51.1789, "lon": -1.8262}
+    assert c.get("/api/status").json()["sensor"] == {"lat": 51.5007, "lon": -0.1246}
     r = c.post(f"/api/results/{res['id']}/cot", json={})
     assert r.status_code == 200, r.text
     j = r.json()
-    assert (j["lat"], j["lon"]) == (51.1789, -1.8262) and "SENSOR_LAT" in j["position_source"]
-    assert 'lat="51.1789000" lon="-1.8262000"' in cots[-1]
+    assert (j["lat"], j["lon"]) == (51.5007, -0.1246) and "SENSOR_LAT" in j["position_source"]
+    assert 'lat="51.5007000" lon="-0.1246000"' in cots[-1]
     assert not _remarks(cots[-1]).startswith("SIMULATED")
     # C4.4: the same uid again within 5 s is refused, clearly
     again = c.post(f"/api/results/{res['id']}/cot", json={})
     assert again.status_code == 429 and "wait" in again.json()["detail"]
     m = c.post(f"/api/results/{res['id']}/mesh", json={})
-    assert m.status_code == 200 and not texts[-1].startswith("[SIM]") and "@51.17890,-1.82620" in texts[-1]
+    assert m.status_code == 200 and not texts[-1].startswith("[SIM]") and "@51.50070,-0.12460" in texts[-1]
     m2 = c.post(f"/api/results/{res['id']}/mesh", json={})
     assert m2.status_code == 429 and "30 s" in m2.json()["detail"] and len(texts) == 1
 

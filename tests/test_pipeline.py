@@ -73,7 +73,7 @@ def test_full_pipeline_writes_outputs(samples, tmp_path):
     r = pipeline.analyze(d / s["before"], d / s["after"], tmp_path)
     out = tmp_path / r["id"]
     assert r["mode"] == "flat" and r["changes_total"] >= 4
-    assert r["gps"] and abs(r["gps"]["lat"] - 51.2146) < 0.001
+    assert r["gps"] and abs(r["gps"]["lat"] - 51.4779) < 0.001
     for name in ("report.png", "report.pdf", "result.json"):
         assert (out / name).stat().st_size > 1000
     v = r["views"][0]

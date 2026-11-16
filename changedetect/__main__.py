@@ -13,7 +13,7 @@ from changedetect.config import DEFAULT_PORT, Settings
 
 
 def parse_args(argv=None):
-    p = argparse.ArgumentParser(description="Before/after imagery change detection (ISR training demo)")
+    p = argparse.ArgumentParser(description="Before/after imagery change detection (training and demo tool)")
     p.add_argument("--port", type=int, default=None, help=f"web UI port (default $WEB_PORT or {DEFAULT_PORT})")
     p.add_argument("--host", default="0.0.0.0", help="bind address")
     p.add_argument("--data-dir", default=None, help="reports/uploads dir (default /var/lib/change-detect)")

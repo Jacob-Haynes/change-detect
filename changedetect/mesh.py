@@ -1,4 +1,4 @@
-"""Publish short mesh texts via the meshbus MQTT topic (the blufor-tracker bridge owns the radio)."""
+"""Publish short mesh texts via the meshbus MQTT topic (a separate mesh bridge service owns the radio)."""
 
 from __future__ import annotations
 

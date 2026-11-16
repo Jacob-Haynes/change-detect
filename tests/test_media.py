@@ -53,7 +53,7 @@ def test_360_pipeline_finds_both_changes(samples, tmp_path):
     assert r["mode"] == "360"
     assert r["yaw_offset"]["deg"] == pytest.approx(37.0, abs=1.5)
     by_view = {v["name"]: len(v["changes"]) for v in r["views"]}
-    assert by_view["360 right (90°)"] >= 1  # new hide
+    assert by_view["360 right (90°)"] >= 1  # new shelter
     assert by_view["360 left (270°)"] >= 1  # car gone
     assert by_view["360 front (0°)"] == 0 and by_view["360 back (180°)"] == 0
 

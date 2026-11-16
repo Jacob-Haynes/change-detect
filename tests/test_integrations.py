@@ -10,10 +10,10 @@ from changedetect import cot, gemini, labeler, mesh
 
 
 def test_cot_xml_is_valid():
-    xml = cot.build_change_cot("change-detect-x", 51.2, -1.8, "CHANGE <1>", 'car "gone" & hide', manual=True)
+    xml = cot.build_change_cot("change-detect-x", 51.48, -0.01, "CHANGE <1>", 'car "gone" & shelter', manual=True)
     ev = ET.fromstring(xml.split("?>", 1)[1])
     assert ev.get("type") == "a-u-G" and ev.get("how") == "h-e"
-    assert float(ev.find("point").get("lat")) == 51.2
+    assert float(ev.find("point").get("lat")) == 51.48
     assert ev.find("detail/contact").get("callsign") == "CHANGE <1>"
     assert "&" in ev.find("detail/remarks").text
 

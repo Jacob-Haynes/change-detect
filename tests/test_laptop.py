@@ -54,10 +54,10 @@ def test_heic_gps(tmp_path):
     im = Image.fromarray((np.random.default_rng(0).random((200, 300, 3)) * 255).astype("uint8"))
     ex = Image.Exif()
     g = ex.get_ifd(0x8825)
-    g[1], g[2], g[3], g[4] = "N", (51.0, 12.0, 0.0), "W", (1.0, 48.0, 0.0)
+    g[1], g[2], g[3], g[4] = "N", (51.0, 28.0, 48.0), "W", (0.0, 36.0, 0.0)
     im.save(tmp_path / "IMG_0001.HEIC", exif=ex)
     m = media.read_exif(tmp_path / "IMG_0001.HEIC")
-    assert m.lat == pytest.approx(51.2) and m.lon == pytest.approx(-1.8)
+    assert m.lat == pytest.approx(51.48) and m.lon == pytest.approx(-0.6)
     assert media.load_image(tmp_path / "IMG_0001.HEIC").shape == (200, 300, 3)
 
 

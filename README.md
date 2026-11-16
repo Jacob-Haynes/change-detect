@@ -1,7 +1,7 @@
 # change-detect
 
-Compare **before** and **after** imagery of the same area and highlight what changed. This is the
-classic recce/ISR task: a vehicle that moved, a new hide, disturbed ground. It runs entirely on a
+Compare **before** and **after** imagery of the same area and highlight what changed: a vehicle that moved, a new
+structure, disturbed ground. It runs entirely on a
 Raspberry Pi 5 CPU (OpenCV, no AI accelerator) with a web UI on **port 8130**.
 
 > Training and demonstration tool. Every change it reports is a machine guess: confirm each one by eye.
@@ -47,7 +47,7 @@ Raspberry Pi 5 CPU (OpenCV, no AI accelerator) with a web UI on **port 8130**.
 8. **Optional ATAK**: pushes a CoT "change detected" marker (`a-u-G`, unknown ground) with the
    summary. The position is a manually entered lat/lon, else EXIF GPS, else the OP position
    `SENSOR_LAT`/`SENSOR_LON`. With none of these the marker is refused: it is never sent at 0,0.
-   **Mesh**: sends a short summary text over the Meshtastic mesh via the blufor-tracker bridge.
+   **Mesh**: sends a short summary text over the Meshtastic mesh via a separate mesh bridge service (MQTT `meshbus/tx`).
    - Results from the bundled synthetic samples are labelled: CoT remarks start `SIMULATED: ` and
      mesh texts start `[SIM] `. Your own imagery carries no prefix.
    - Rate limits: at most one mesh text every 30 s, and one CoT event per marker uid every 5 s.
@@ -125,13 +125,13 @@ and poor results on top-down drone imagery from height.
 
 ### Optional: Gemini cloud mode
 
-> **Cloud mode sends image crops to Google.** Use demo footage only. Never use real operational
+> **Cloud mode sends image crops to Google.** Use demo footage only. Never use real or sensitive
 > imagery. With no key, or with no internet, everything else works offline.
 
 ## Running on a laptop
 
 The Pi `isr-pi.local` (hotspot 192.168.4.1) stays the hub: hotspot, OpenTAKServer, mesh bridge,
-MQTT broker and launcher. change-detect runs on the **HQ Mac** `isr-hq.local` (M5 Pro, which also
+MQTT broker and launcher. change-detect runs on the **HQ Mac** `isr-hq.local` (which also
 runs Ollama) as the analysis station. The Mac joins the Pi's hotspot.
 
 `scripts/run-laptop.sh` reads its configuration **from the environment only**. The platform's
@@ -165,7 +165,7 @@ open http://isr-hq.local:8130/
   - Offline with no weights at all, the UI says "YOLO: model missing" and labels are off; it does not hang.
   - Online with weights missing, it downloads them in the background.
 - **Offline AI suggestions:** install [Ollama](https://ollama.com) on the HQ Mac and run
-  `ollama pull qwen3-vl:8b` (about 6 GB, fine on 64 GB). Leave `VLM_BACKEND=auto`: suggestions then
+  `ollama pull qwen3-vl:8b` (about 6 GB). Leave `VLM_BACKEND=auto`: suggestions then
   stay on the Mac, and the UI shows "local VLM (qwen3-vl:8b)". If Ollama isn't running and
   `GEMINI_API_KEY` is set, it falls back to Gemini cloud.
 - **Pi address.** If mDNS fails on the hotspot, set `TAK_HOST` and `MQTT_HOST` to 192.168.4.1.
@@ -189,21 +189,21 @@ pytest -q
 ```
 
 `--simulate` writes the bundled synthetic samples and preloads an analysis. One sample is an
-overhead pass in which a car moved, a camouflaged hide appeared and some ground was dug. The other
+overhead pass in which a car moved, a covered shelter appeared and some ground was dug. The other
 is a 360 pair with a 37° heading change. TAK and MQTT connections fail quietly when no server is
 running.
 
 ## Demo script (about 20 minutes)
 
 **Kit:** iPhone or GoPro Hero 4, optionally the FPV drone (DJI O3/O4 recordings) or the
-Insta360 ONE, a car or a pile of kit, and the Pi running a pi-platform profile that includes
+Insta360 ONE, a car or a few large objects, and the Pi running a pi-platform profile that includes
 change-detect and OpenTAKServer, with ATAK on a phone.
 
-1. **Brief (2 min):** recce teams revisit a location and ask "what's different?". Comparing photos
+1. **Brief (2 min):** survey and inspection teams revisit a location and ask "what's different?". Comparing photos
    by eye is slow and easy to get wrong. Show the synthetic sample in the UI first.
 2. **First pass:** walk or fly a short route. Stop at 2–3 marked points (a fence post, a tree) and
    take a still at each, or record one steady clip. Note the spot, height and heading.
-3. **Make changes:** move a car 10–20 m, put out a bergen, cam net or ammo box, and scrape or dig
+3. **Make changes:** move a car 10–20 m, put out a rucksack, a tarp or a box, and scrape or dig
    a patch of ground. Optionally have someone stand in shot in one pass only.
 4. **Second pass:** repeat the route from the **same marked points**, same height, same heading.
 5. **Analyse:** copy the files to a laptop or phone and upload BEFORE and AFTER in the web UI.
@@ -213,8 +213,8 @@ change-detect and OpenTAKServer, with ATAK on a phone.
    - the swipe slider and heatmap, then the numbered boxes and crops;
    - YOLO labels ("vehicle appeared"), if the model is installed;
    - "Get AI suggestions" if online (point out the AI badge and that the crops go to Google).
-6. **Report and share:** download the PDF, push the marker to ATAK (EXIF GPS or typed grid
-   converted to lat/lon), and send the mesh summary to the Meshtastic nodes.
+6. **Report and share:** download the PDF, push the marker to ATAK (EXIF GPS or a typed
+   lat/lon), and send the mesh summary to the Meshtastic nodes.
 7. **Discuss:** what it missed, what it falsely flagged (shadows, wind-blown vegetation, parallax on
    tall objects), and why repeatable imagery matters.
 
@@ -267,3 +267,7 @@ change-detect and OpenTAKServer, with ATAK on a phone.
 - On the Pi, processing works at about 1600 px (360 views at about 1024×768), so very small objects
   need closer shots, or the laptop profile.
 - The ATAK marker is a single point per analysis, and one analysis runs at a time.
+
+## License
+
+MIT, see [LICENSE](LICENSE). The optional YOLO weights are not included and come under Ultralytics' AGPL-3.0 licence.
