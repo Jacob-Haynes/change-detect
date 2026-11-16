@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Change Detect</title>
+<style>
+  :root { --bg:#11151a; --panel:#1a2028; --line:#2c3541; --text:#e3e8ee; --muted:#8a97a6;
+          --accent:#e0b23c; --good:#3fb96b; --warn:#e0a03c; --bad:#e2504c; --ai:#9b7bea; }
+  * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); background:#0d1115; }
+  header h1 { font-size:17px; margin:0 12px 0 0; letter-spacing:.5px; }
+  .badge { padding:3px 9px; border-radius:12px; font-size:12px; border:1px solid var(--line); color:var(--muted); white-space:nowrap; }
+  .badge.on { color:#0d1115; background:var(--good); border-color:var(--good); }
+  .badge.cloud { color:#fff; background:var(--ai); border-color:var(--ai); }
+  .badge.sim { color:#0d1115; background:var(--accent); border-color:var(--accent); font-weight:600; }
+  .badge.bad { color:#fff; background:var(--bad); border-color:var(--bad); }
+  main { display:grid; grid-template-columns: 340px 1fr; gap:14px; padding:14px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:14px; }
+  .panel h2 { font-size:13px; text-transform:uppercase; letter-spacing:1px; color:var(--muted); margin:0 0 10px; }
+  label { display:block; margin:8px 0 3px; color:var(--muted); font-size:12px; }
+  input[type=file], select, input[type=number], input[type=text] { width:100%; background:#0d1115; color:var(--text); border:1px solid var(--line); border-radius:5px; padding:6px; }
+  input[type=range] { width:100%; }
+  button { background:var(--accent); color:#111; border:0; border-radius:5px; padding:8px 12px; font-weight:600; cursor:pointer; }
+  button.secondary { background:#2c3541; color:var(--text); }
+  button.ai { background:var(--ai); color:#fff; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .row > * { flex:1; }
+  .muted { color:var(--muted); font-size:12px; }
+  #summary { font-size:16px; font-weight:600; padding:10px 12px; border-radius:6px; background:#0d1115; border-left:4px solid var(--accent); }
+  #summary.failed { border-left-color:var(--bad); color:#ffb4b1; }
+  #summary.good { border-left-color:var(--good); }
+  .tabs { display:flex; gap:4px; flex-wrap:wrap; margin:10px 0; }
+  .tabs button { background:#2c3541; color:var(--text); font-weight:500; padding:6px 10px; }
+  .tabs button.active { background:var(--accent); color:#111; }
+  .stage { position:relative; width:100%; background:#000; border-radius:6px; overflow:hidden; }
+  .stage img { display:block; width:100%; height:auto; }
+  .swipe-top { position:absolute; inset:0; }
+  .swipe-top img { width:100%; }
+  .swipe-line { position:absolute; top:0; bottom:0; width:2px; background:var(--accent); pointer-events:none; }
+  .tag { position:absolute; top:6px; padding:2px 6px; font-size:11px; background:rgba(0,0,0,.6); border-radius:3px; }
+  table { border-collapse:collapse; width:100%; font-size:12px; }
+  td, th { border-bottom:1px solid var(--line); padding:4px 6px; text-align:left; vertical-align:top; }
+  .grade { font-weight:700; text-transform:uppercase; }
+  .grade.good { color:var(--good); } .grade.marginal { color:var(--warn); } .grade.failed { color:var(--bad); }
+  .changes { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:10px; }
+  .change { background:#0d1115; border:1px solid var(--line); border-radius:6px; padding:8px; }
+  .change .crops { display:flex; gap:4px; }
+  .change .crops figure { margin:0; flex:1; }
+  .change .crops img { width:100%; border-radius:3px; display:block; }
+  .change figcaption { font-size:10px; color:var(--muted); text-align:center; }
+  .change .n { display:inline-block; background:#e2504c; color:#fff; font-weight:700; border-radius:3px; padding:0 6px; margin-right:6px; }
+  .aisug { margin-top:5px; padding:4px 6px; border-left:3px solid var(--ai); background:rgba(155,123,234,.12); font-size:12px; }
+  .aisug b { color:var(--ai); }
+  .warn { color:var(--warn); font-size:12px; }
+  .spinner { display:none; } .busy .spinner { display:inline-block; }
+  #history a { color:var(--text); text-decoration:none; display:block; padding:4px 0; border-bottom:1px solid var(--line); font-size:12px; }
+  #history a:hover { color:var(--accent); }
+  #msg { min-height:18px; font-size:12px; margin-top:6px; }
+  a.btnlink { color:var(--accent); margin-right:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>CHANGE DETECT</h1>
+  <span id="b-sim" class="badge" hidden>SIMULATE</span>
+  <span id="b-ai" class="badge">AI: …</span>
+  <span id="b-yolo" class="badge">YOLO: …</span>
+  <span id="b-tak" class="badge">TAK: …</span>
+  <span id="b-mesh" class="badge">Mesh: …</span>
+  <span class="muted" style="margin-left:auto">Training / demo tool. Verify every change by eye.</span>
+</header>
+<main>
+  <div>
+    <div class="panel">
+      <h2>Inputs</h2>
+      <label>Bundled sample</label>
+      <div class="row"><select id="sample"></select><button id="run-sample" class="secondary" style="flex:0">Run</button></div>
+      <label>Before (image or video)</label>
+      <input type="file" id="before" accept="image/*,video/*,.jpg,.jpeg,.png,.mp4,.mov">
+      <label>After (image or video)</label>
+      <input type="file" id="after" accept="image/*,video/*,.jpg,.jpeg,.png,.mp4,.mov">
+      <div class="row">
+        <div><label>Before video time (s, optional)</label><input type="number" id="bt" step="0.5" min="0"></div>
+        <div><label>After video time (s, optional)</label><input type="number" id="at" step="0.5" min="0"></div>
+      </div>
+      <label>Sensitivity <span id="sens-v">0.50</span></label>
+      <input type="range" id="sens" min="0" max="1" step="0.05" value="0.5">
+      <label>Minimum change area (px at ~1600 px width)</label>
+      <input type="number" id="minarea" value="300" min="20" step="50">
+      <label>360 equirectangular</label>
+      <select id="m360"><option value="auto">Auto-detect</option><option value="on">Force 360</option><option value="off">Treat as flat</option></select>
+      <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="yolo" checked> Label with YOLO (if model installed)</label>
+      <div style="margin-top:10px" class="row"><button id="run">Analyse uploads <span class="spinner">…</span></button></div>
+      <div id="msg" class="muted"></div>
+    </div>
+    <div class="panel">
+      <h2>History</h2>
+      <div id="history" class="muted">No analyses yet.</div>
+    </div>
+  </div>
+
+  <div id="results" hidden>
+    <div class="panel">
+      <div id="summary"></div>
+      <div id="meta" class="muted" style="margin-top:8px"></div>
+      <table id="align" style="margin-top:10px"></table>
+      <div id="warnings"></div>
+    </div>
+    <div class="panel">
+      <div class="tabs" id="viewtabs"></div>
+      <div class="tabs" id="modetabs">
+        <button data-mode="side" class="active">Side by side</button>
+        <button data-mode="swipe">Swipe</button>
+        <button data-mode="heat">Heatmap</button>
+        <button data-mode="boxes">Change boxes</button>
+      </div>
+      <div id="stage" class="stage"></div>
+      <div id="swipectl" hidden><input type="range" id="swipe" min="0" max="100" value="50"></div>
+    </div>
+    <div class="panel">
+      <h2>Changes</h2>
+      <div class="row" style="margin-bottom:10px">
+        <button id="ai" class="ai" style="flex:0;white-space:nowrap">Get AI suggestions</button>
+        <span id="ai-note" class="muted"></span>
+      </div>
+      <div id="changes" class="changes"></div>
+    </div>
+    <div class="panel">
+      <h2>Report &amp; share</h2>
+      <div id="reports" style="margin-bottom:10px"></div>
+      <div class="row">
+        <div><label>Latitude</label><input type="text" id="lat" placeholder="from EXIF or manual"></div>
+        <div><label>Longitude</label><input type="text" id="lon" placeholder="from EXIF or manual"></div>
+      </div>
+      <div class="muted" id="gpsnote" style="margin-top:4px"></div>
+      <div class="row" style="margin-top:10px">
+        <button id="cot" class="secondary">Push marker to ATAK</button>
+        <button id="mesh" class="secondary">Send summary to mesh</button>
+      </div>
+      <div id="share-msg" class="muted" style="margin-top:6px"></div>
+    </div>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let status = null, result = null, viewIdx = 0, mode = 'side';
+
+function el(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') e.className = v; else if (k === 'text') e.textContent = v; else e.setAttribute(k, v);
+  }
+  for (const k of kids) e.append(k);
+  return e;
+}
+function badge(id, text, cls) { const b = $(id); b.textContent = text; b.className = 'badge ' + (cls || ''); }
+
+async function refreshStatus() {
+  try {
+    status = await (await fetch('/api/status')).json();
+    $('b-sim').hidden = !status.simulate; $('b-sim').className = 'badge sim';
+    if (status.gemini.enabled) badge('b-ai', 'AI: CLOUD (' + status.gemini.model + ')', 'cloud');
+    else badge('b-ai', 'AI: OFFLINE (local only)', '');
+    badge('b-yolo', status.yolo.enabled ? 'YOLO: on' : 'YOLO: off', status.yolo.enabled ? 'on' : '');
+    $('b-yolo').title = status.yolo.error || status.yolo.model || '';
+    const t = status.tak;
+    if (!t.enabled) badge('b-tak', 'TAK: disabled', '');
+    else if (t.connected) badge('b-tak', 'TAK: connected', 'on');
+    else badge('b-tak', 'TAK: ' + (t.pending ? t.pending + ' queued, retrying' : 'idle'), t.pending ? 'bad' : '');
+    $('b-tak').title = t.last_error || (t.host + ':' + t.port);
+    badge('b-mesh', status.mesh.enabled ? (status.mesh.last_error ? 'Mesh: broker down' : 'Mesh: ' + (status.mesh.sent ? status.mesh.sent + ' sent' : 'idle')) : 'Mesh: disabled',
+          status.mesh.last_error ? 'bad' : '');
+    $('b-mesh').title = status.mesh.last_error || '';
+    $('ai').disabled = !status.gemini.enabled;
+    $('ai-note').textContent = status.gemini.enabled
+      ? 'Sends the before/after crops of each change to Google Gemini. Demo footage only.'
+      : 'Offline mode: set GEMINI_API_KEY in /etc/change-detect.env to enable cloud suggestions.';
+  } catch (e) { badge('b-tak', 'server unreachable', 'bad'); }
+}
+
+async function loadSamples() {
+  const s = await (await fetch('/api/samples')).json();
+  $('sample').replaceChildren(...s.map(x => el('option', { value: x.id, text: x.title })));
+}
+
+async function loadHistory() {
+  const h = await (await fetch('/api/results')).json();
+  if (!h.length) return;
+  $('history').replaceChildren(...h.map(r => {
+    const a = el('a', { href: '#' + r.id, text: `${r.id}  ${r.alignment_ok ? '' : '[ALIGN FAIL] '}${r.summary}` });
+    a.onclick = (ev) => { ev.preventDefault(); openResult(r.id); };
+    return a;
+  }));
+}
+
+async function openResult(id) {
+  const r = await fetch('/api/results/' + id);
+  if (r.ok) { show(await r.json()); }
+}
+
+function formData() {
+  const f = new FormData();
+  f.append('sensitivity', $('sens').value);
+  f.append('min_area', $('minarea').value);
+  f.append('mode360', $('m360').value);
+  f.append('use_yolo', $('yolo').checked ? 'true' : 'false');
+  if ($('bt').value) f.append('before_time_s', $('bt').value);
+  if ($('at').value) f.append('after_time_s', $('at').value);
+  return f;
+}
+
+async function runAnalysis(f) {
+  document.body.classList.add('busy');
+  $('run').disabled = $('run-sample').disabled = true;
+  $('msg').textContent = 'Analysing… (videos and 360 stills take longer on the Pi)';
+  try {
+    const r = await fetch('/api/analyze', { method: 'POST', body: f });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    $('msg').textContent = `Done in ${j.elapsed_s}s`;
+    show(j); loadHistory();
+  } catch (e) { $('msg').textContent = 'Error: ' + e.message; }
+  finally { document.body.classList.remove('busy'); $('run').disabled = $('run-sample').disabled = false; }
+}
+
+$('run').onclick = () => {
+  if (!$('before').files[0] || !$('after').files[0]) { $('msg').textContent = 'Choose both a BEFORE and an AFTER file.'; return; }
+  const f = formData(); f.append('before', $('before').files[0]); f.append('after', $('after').files[0]);
+  runAnalysis(f);
+};
+$('run-sample').onclick = () => { const f = formData(); f.append('sample', $('sample').value); runAnalysis(f); };
+$('sens').oninput = () => $('sens-v').textContent = Number($('sens').value).toFixed(2);
+
+const url = (file) => file ? `/results/${result.id}/${file}` : null;
+
+function show(r) {
+  result = r; viewIdx = 0;
+  $('results').hidden = false;
+  location.hash = r.id;
+  const s = $('summary');
+  s.textContent = r.summary;
+  s.className = r.alignment_ok ? (r.changes_total ? '' : 'good') : 'failed';
+  const b = r.inputs.before, a = r.inputs.after;
+  const fmt = (m) => `${m.name}${m.time ? ' · ' + m.time : ''}${m.frame_time_s != null ? ' · frame @' + m.frame_time_s + 's' : ''}${m.lat != null ? ' · GPS ' + m.lat.toFixed(5) + ',' + m.lon.toFixed(5) : ' · no GPS'}`;
+  let meta = `Before: ${fmt(b)}  |  After: ${fmt(a)}  |  mode ${r.mode}`;
+  if (r.yaw_offset) meta += ` · heading offset ${r.yaw_offset.deg}° (conf ${r.yaw_offset.confidence})`;
+  if (r.video) meta += ` · video frames matched with ${r.video.match_inliers} inliers`;
+  meta += r.yolo_used ? ' · YOLO labels on' : ' · YOLO labels off';
+  $('meta').textContent = meta;
+
+  const tbl = $('align');
+  tbl.replaceChildren(el('tr', {}, ...['View', 'Alignment', 'Method', 'Inliers', 'Ratio', 'Overlap', 'Spread', 'Error px', 'Changes'].map(h => el('th', { text: h }))));
+  const warns = [];
+  r.views.forEach(v => {
+    const al = v.alignment;
+    tbl.append(el('tr', {}, el('td', { text: v.name }), el('td', { class: 'grade ' + al.grade, text: al.grade }),
+      el('td', { text: al.method }), el('td', { text: al.inliers + '/' + al.matches }), el('td', { text: al.inlier_ratio.toFixed(2) }),
+      el('td', { text: Math.round(al.overlap * 100) + '%' }), el('td', { text: al.inlier_spread.toFixed(2) }),
+      el('td', { text: al.reproj_error_px ?? '-' }), el('td', { text: al.ok ? v.changes.length : 'not called' })));
+    (al.reasons || []).forEach(x => warns.push(`${v.name}: ${x}`));
+    (v.warnings || []).forEach(x => warns.push(`${v.name}: ${x}`));
+  });
+  $('warnings').replaceChildren(...warns.map(w => el('div', { class: 'warn', text: '⚠ ' + w })));
+
+  $('viewtabs').hidden = r.views.length < 2;
+  $('viewtabs').replaceChildren(...r.views.map((v, i) => {
+    const btn = el('button', { text: `${v.name} (${v.alignment.ok ? v.changes.length : '✗'})` });
+    btn.onclick = () => { viewIdx = i; renderStage(); };
+    return btn;
+  }));
+  renderStage(); renderChanges();
+
+  $('reports').replaceChildren(
+    el('a', { class: 'btnlink', href: url(r.report.png), target: '_blank', text: 'Report PNG' }),
+    el('a', { class: 'btnlink', href: url(r.report.pdf), target: '_blank', text: 'Report PDF' }),
+    el('span', { class: 'muted', text: 'Saved under /var/lib/change-detect/reports/' + r.id }));
+  if (r.gps) { $('lat').value = r.gps.lat; $('lon').value = r.gps.lon; $('gpsnote').textContent = `From ${r.gps.source} (camera position, not the exact change position). Edit to override.`; }
+  else { $('lat').value = ''; $('lon').value = ''; $('gpsnote').textContent = 'No GPS in these files: enter the position manually to push to ATAK.'; }
+  $('cot').disabled = !r.alignment_ok;
+  $('share-msg').textContent = '';
+}
+
+function renderStage() {
+  const v = result.views[viewIdx];
+  [...$('viewtabs').children].forEach((b, i) => b.classList.toggle('active', i === viewIdx));
+  [...$('modetabs').children].forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+  const st = $('stage'); st.replaceChildren(); $('swipectl').hidden = true;
+  const im = v.images;
+  const aligned = im.after_aligned;
+  if (!v.alignment.ok && mode !== 'side') {
+    st.append(el('div', { style: 'padding:30px;color:#ffb4b1', text: 'Alignment failed for this view, so no aligned comparison is shown. See the side-by-side view.' }));
+    return;
+  }
+  if (mode === 'side') st.append(el('img', { src: url(im.side), alt: 'side by side' }));
+  else if (mode === 'heat') st.append(el('img', { src: url(im.heat), alt: 'heatmap' }), el('span', { class: 'tag', style: 'left:6px', text: 'Difference heatmap (bright = more change)' }));
+  else if (mode === 'boxes') {
+    const after = el('img', { src: url(im.boxes_after) }); const before = el('img', { src: url(im.boxes_before) });
+    let showAfter = true; before.style.display = 'none';
+    const tag = el('span', { class: 'tag', style: 'left:6px', text: 'AFTER (click to toggle)' });
+    st.onclick = () => { showAfter = !showAfter; after.style.display = showAfter ? '' : 'none'; before.style.display = showAfter ? 'none' : ''; tag.textContent = (showAfter ? 'AFTER' : 'BEFORE') + ' (click to toggle)'; };
+    st.append(before, after, tag);
+    return;
+  } else if (mode === 'swipe') {
+    const base = el('img', { src: url(im.before) });
+    const topWrap = el('div', { class: 'swipe-top' }, el('img', { src: url(aligned) }));
+    const line = el('div', { class: 'swipe-line' });
+    st.append(base, topWrap, line, el('span', { class: 'tag', style: 'left:6px', text: 'BEFORE' }), el('span', { class: 'tag', style: 'right:6px', text: 'AFTER' }));
+    const upd = () => { const p = $('swipe').value; topWrap.style.clipPath = `inset(0 0 0 ${p}%)`; line.style.left = p + '%'; };
+    $('swipe').oninput = upd; upd(); $('swipectl').hidden = false;
+  }
+  st.onclick = null;
+}
+$('modetabs').onclick = (e) => { if (e.target.dataset.mode) { mode = e.target.dataset.mode; renderStage(); } };
+
+function renderChanges() {
+  const all = result.views.flatMap(v => v.changes);
+  if (!result.alignment_ok) { $('changes').replaceChildren(el('div', { class: 'warn', text: 'No changes called: the images could not be aligned reliably. Retake from the same spot, height and heading.' })); return; }
+  if (!all.length) { $('changes').replaceChildren(el('div', { class: 'muted', text: 'No changes above the size/sensitivity threshold.' })); return; }
+  $('changes').replaceChildren(...all.map(c => {
+    const card = el('div', { class: 'change' },
+      el('div', {}, el('span', { class: 'n', text: c.n }), el('b', { text: c.label_text || c.kind })),
+      el('div', { class: 'muted', text: `${c.view !== 'main' ? c.view + ' · ' : ''}area ${c.area}px · score ${c.score}${c.label_text ? ' · geometry: ' + c.kind : ''}` }),
+      el('div', { class: 'crops' },
+        el('figure', {}, el('img', { src: url(c.crops.before) }), el('figcaption', { text: 'before' })),
+        el('figure', {}, el('img', { src: url(c.crops.after) }), el('figcaption', { text: 'after (aligned)' }))));
+    if (c.ai_suggestion) card.append(el('div', { class: 'aisug' }, el('b', { text: 'AI suggestion: ' }), c.ai_suggestion));
+    return card;
+  }));
+}
+
+$('ai').onclick = async () => {
+  $('ai').disabled = true; $('ai-note').textContent = 'Asking Gemini…';
+  try {
+    const r = await fetch(`/api/results/${result.id}/ai`, { method: 'POST' });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail);
+    result = j.result; renderChanges();
+    $('ai-note').textContent = `${j.described} change(s) described${j.error ? ' · ' + j.error : ''}. AI suggestions are guesses: check them.`;
+  } catch (e) { $('ai-note').textContent = 'AI error: ' + e.message; }
+  finally { $('ai').disabled = !(status && status.gemini.enabled); }
+};
+
+$('cot').onclick = async () => {
+  const body = {};
+  const lat = parseFloat($('lat').value), lon = parseFloat($('lon').value);
+  const fromGps = result.gps && lat === result.gps.lat && lon === result.gps.lon;
+  if (!fromGps && !isNaN(lat) && !isNaN(lon)) { body.lat = lat; body.lon = lon; }
+  const r = await fetch(`/api/results/${result.id}/cot`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const j = await r.json();
+  $('share-msg').textContent = r.ok ? `CoT marker ${j.state} for ${j.lat.toFixed(5)}, ${j.lon.toFixed(5)}${j.tak.connected ? '' : ' (TAK server not connected yet; will retry)'}` : 'ATAK: ' + j.detail;
+  refreshStatus();
+};
+$('mesh').onclick = async () => {
+  const r = await fetch(`/api/results/${result.id}/mesh`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  const j = await r.json();
+  $('share-msg').textContent = j.sent ? 'Mesh text queued: ' + j.text : 'Mesh: ' + (j.error || 'not sent');
+  refreshStatus();
+};
+
+(async () => {
+  await refreshStatus(); await loadSamples(); await loadHistory();
+  const id = location.hash.slice(1);
+  if (id) openResult(id);
+  else {
+    const h = await (await fetch('/api/results?limit=1')).json();
+    if (h.length) openResult(h[0].id);
+  }
+  setInterval(refreshStatus, 5000);
+})();
+</script>
+</body>
+</html>

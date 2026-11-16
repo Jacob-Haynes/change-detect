@@ -1,0 +1,87 @@
+"""Runtime settings, read from the environment (/etc/change-detect.env on the Pi)."""
+
+from __future__ import annotations
+
+import logging
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_DATA_DIR = Path("/var/lib/change-detect")
+# Current stable Gemini Flash model per Google's model list (Nov 2026). Override with GEMINI_MODEL.
+DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+DEFAULT_PORT = 8130
+
+
+def _env(name: str, default: str | None = None) -> str | None:
+    value = os.environ.get(name)
+    return value if value not in (None, "") else default
+
+
+def _writable(path: Path) -> bool:
+    probe = path
+    while not probe.exists():
+        probe = probe.parent
+    return os.access(probe, os.W_OK)
+
+
+@dataclass
+class Settings:
+    data_dir: Path
+    simulate: bool = False
+    tak_host: str = "127.0.0.1"
+    tak_port: int = 8087
+    cot_enabled: bool = True
+    mqtt_host: str = "127.0.0.1"
+    mqtt_port: int = 1883
+    mqtt_user: str = "guest"
+    mqtt_pass: str = "guest"
+    mesh_enabled: bool = True
+    gemini_api_key: str | None = None
+    gemini_model: str = DEFAULT_GEMINI_MODEL
+    yolo_model: Path | None = None
+    max_upload_mb: int = 1024
+
+    @classmethod
+    def from_env(cls, data_dir: str | Path | None = None, simulate: bool = False) -> "Settings":
+        chosen = Path(data_dir or _env("CHANGE_DETECT_DATA_DIR") or DEFAULT_DATA_DIR)
+        if not _writable(chosen):
+            fallback = Path.cwd() / "data"
+            logger.warning("Data dir %s not writable; using %s", chosen, fallback)
+            chosen = fallback
+        yolo = _env("YOLO_MODEL")
+        yolo_path = Path(yolo) if yolo else chosen / "models" / "yolo11n.onnx"
+        return cls(
+            data_dir=chosen,
+            simulate=simulate,
+            tak_host=_env("TAK_HOST", "127.0.0.1"),
+            tak_port=int(_env("TAK_PORT", "8087")),
+            cot_enabled=_env("COT_ENABLED", "1") not in ("0", "false", "no"),
+            mqtt_host=_env("MQTT_HOST", "127.0.0.1"),
+            mqtt_port=int(_env("MQTT_PORT", "1883")),
+            mqtt_user=_env("MQTT_USER", "guest"),
+            mqtt_pass=_env("MQTT_PASS", "guest"),
+            mesh_enabled=_env("MESH_ENABLED", "1") not in ("0", "false", "no"),
+            gemini_api_key=_env("GEMINI_API_KEY"),
+            gemini_model=_env("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
+            yolo_model=yolo_path,
+            max_upload_mb=int(_env("MAX_UPLOAD_MB", "1024")),
+        )
+
+    @property
+    def reports_dir(self) -> Path:
+        return self.data_dir / "reports"
+
+    @property
+    def uploads_dir(self) -> Path:
+        return self.data_dir / "uploads"
+
+    @property
+    def samples_dir(self) -> Path:
+        return self.data_dir / "samples"
+
+    def ensure_dirs(self) -> None:
+        for d in (self.data_dir, self.reports_dir, self.uploads_dir, self.samples_dir, self.data_dir / "models"):
+            d.mkdir(parents=True, exist_ok=True)
