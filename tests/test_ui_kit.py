@@ -1,4 +1,4 @@
-"""UI spec v2: the page uses the shared ISTAR kit look, vendored unchanged."""
+"""UI spec v3: the page uses the shared ISTAR kit look, vendored unchanged."""
 
 import hashlib
 import socket
@@ -8,11 +8,11 @@ from fastapi.testclient import TestClient
 from changedetect.config import Settings
 from changedetect.web.app import create_app
 
-# sha256 of the ui-kit v2 files; re-copy from the kit and update these together
-KIT_VERSION = 2
+# sha256 of the ui-kit v3 files (pi-profiles/ui); re-copy from the kit and update these together
+KIT_VERSION = 3
 KIT_SHA256 = {
-    "isr-ui.css": "ed601e0494d7b8c93f246205d53a03916b15ceb7eb3a54526a6cd4a447879ec7",
-    "isr-ui.js": "191f2b6dce0c52a760a8fdeddf4d5f127399d7d3e1684dcc26a5dbe78874d274",
+    "isr-ui.css": "287c3df0938d25c25b04b751007095c3cf08e1df0e2689d3dd8df8b3e9eb832c",
+    "isr-ui.js": "79a61cb2a427302e45b62cbebe2d022eff2dcd0549df5edea77b13a6b478fe7d",
     "fonts/barlow-condensed-500.woff2": "31ff5e6e96a096fde4d78bc838719e69b093db2d0b062b96e423c065a6d1b2b1",
     "fonts/barlow-condensed-600.woff2": "5bc49d41f32810a114765314392332ce2acae2276635eee265a50319a12c1b49",
     "fonts/ibm-plex-mono-400.woff2": "52de70091213c9eab340e2a7ac59e7b6b2b94e089bf69ef38479b22cfde4274c",
