@@ -25,12 +25,12 @@
   .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
   .tabs .isr-btn { min-height: 36px; padding: 6px 14px; font-size: 14px; }
   .tabs .isr-btn.active { border-color: var(--accent); color: var(--accent); }
-  .stage { position: relative; width: 100%; background: #000; overflow: hidden; }
+  .stage { position: relative; width: 100%; background: var(--bg); overflow: hidden; }
   .stage img { display: block; width: 100%; height: auto; }
   .stage .msg { padding: 30px; color: var(--bad); }
   .swipe-top { position: absolute; inset: 0; }
   .swipe-line { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent); pointer-events: none; }
-  .stage .lbl { position: absolute; top: 8px; padding: 2px 8px; font-size: 13px; background: rgba(0,0,0,.65); }
+  .stage .lbl { position: absolute; top: 8px; padding: 2px 8px; font-size: 13px; background: var(--panel); }
   #swipe { width: 100%; padding: 0; }
   .changes { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--gap); margin-top: var(--gap); }
   .change .crops { display: flex; gap: 6px; margin-top: 8px; }

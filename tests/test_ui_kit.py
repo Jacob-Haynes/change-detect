@@ -1,4 +1,4 @@
-"""UI spec v2: the page uses the shared ISR kit look, vendored unchanged."""
+"""UI spec v2: the page uses the shared ISTAR kit look, vendored unchanged."""
 
 import hashlib
 import socket
