@@ -14,8 +14,8 @@ Raspberry Pi 5 CPU (OpenCV, no AI accelerator) with a web UI on **port 8130**.
    O3/O4 onboard recordings (H.264/H.265, 4K, usually no GPS). For videos it samples frames from both clips and picks the
    sharpest pair that overlaps best; you can give an approximate time in each clip. EXIF GPS,
    capture time and camera are read where present.
-   **Folder / SD card:** drag a DCIM folder straight from the card. One folder is split into two
-   passes at the largest gap in capture time. Or drop each pass in its own box. Matching shots are
+   **Folders:** drop a folder on Before and another on After, or drop a whole SD card / DCIM
+   folder in Details and it is split into two passes at the largest gap in capture time. Matching shots are
    paired by GPS (within 40 m), by position in the sequence and by feature matching, and each pair
    is analysed. Sidecar files (`.LRV`, `.THM`, `._*`) are skipped.
 2. **360** inputs come in two kinds:
@@ -66,9 +66,10 @@ Raspberry Pi 5 CPU (OpenCV, no AI accelerator) with a web UI on **port 8130**.
        They have type `a-u-G`, no `<takv>`, no contact endpoint, a real position (never 0,0), and
        a single `<link>` to the registration uid.
 
-The header always shows which modes are active: `SIMULATE`, profile and accelerator
-(`PI · CPU · 1600px`, `LAPTOP · MPS · full-res`), the AI suggestion source (local VLM, Gemini
-cloud, or off), YOLO on/off and its device, TAK connection, and mesh state.
+The page uses the shared ISTAR kit look (`static/isr-ui.css`, `isr-ui.js` and `fonts/`, vendored
+unchanged from `ui-kit/`). The header has one status pill (Ready / Degraded / Offline); click it
+for the server mode, AI source, YOLO, TAK and mesh, which are optional for the demo. Settings,
+model names, file paths and diagnostics are under Details; past reports under Report history.
 
 Every 10 s it publishes a retained heartbeat to `isrkit/heartbeat/change-detect`, so the Pi
 launcher can link to it wherever it runs. The payload is
@@ -223,15 +224,15 @@ change-detect and OpenTAKServer, with ATAK on a phone.
 3. **Make changes:** move a car 10–20 m, put out a rucksack, a tarp or a box, and scrape or dig
    a patch of ground. Optionally have someone stand in shot in one pass only.
 4. **Second pass:** repeat the route from the **same marked points**, same height, same heading.
-5. **Analyse:** copy the files to a laptop or phone and upload BEFORE and AFTER in the web UI.
+5. **Analyse:** copy the files to a laptop or phone, drop them on Before and After and press Compare.
    Show:
    - the alignment grade and the reason it gives. Then try a pair taken from a different spot:
      the tool refuses to call changes instead of guessing;
    - the swipe slider and heatmap, then the numbered boxes and crops;
    - YOLO labels ("vehicle appeared"), if the model is installed;
-   - "Get AI suggestions" if online (point out the AI badge and that the crops go to Google).
-6. **Report and share:** download the PDF, push the marker to ATAK (EXIF GPS or a typed
-   lat/lon), and send the mesh summary to the Meshtastic nodes.
+   - "Describe with AI" (the status pill and Details show whether it is local or Gemini, whose crops go to Google).
+6. **Report and share:** open the report PDF, send the marker to ATAK (EXIF GPS, or a
+   position typed under Result details), and send the mesh summary to the Meshtastic nodes.
 7. **Discuss:** what it missed, what it falsely flagged (shadows, wind-blown vegetation, parallax on
    tall objects), and why repeatable imagery matters.
 

@@ -26,7 +26,7 @@ def client(tmp_path_factory):
 
 
 def test_index_and_status(client):
-    assert "CHANGE DETECT" in client.get("/").text
+    assert "<h1>Change detect</h1>" in client.get("/").text
     s = client.get("/api/status").json()
     assert s["simulate"] and not s["gemini"]["enabled"] and not s["yolo"]["enabled"]
     assert s["mode"] == "simulate" and s["ai"]["active"] == "off" and s["profile"] == "pi"
