@@ -1,0 +1,26 @@
+[Unit]
+Description=Change Detect (before/after imagery change detection, web UI :8130)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=changedetect
+Group=changedetect
+WorkingDirectory=/opt/change-detect
+EnvironmentFile=-/etc/change-detect.env
+Environment=PYTHONUNBUFFERED=1
+Environment=CHANGE_DETECT_DATA_DIR=/var/lib/change-detect
+ExecStart=/opt/change-detect/deploy/start.sh
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+KillSignal=SIGTERM
+# Analysis is CPU-heavy; keep it below the radio bridge and TAK server
+Nice=5
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/change-detect
+
+[Install]
+WantedBy=multi-user.target

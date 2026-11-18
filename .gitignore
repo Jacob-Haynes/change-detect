@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+*.env
+!deploy/*.env.example
+data/
+.pytest_cache/
+.idea/
+.vscode/
+*.onnx
+.DS_Store
+laptop.env
+.venv-laptop/

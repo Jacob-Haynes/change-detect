@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Change detect</title>
+<link rel="stylesheet" href="/static/isr-ui.css?v=3">
+<script src="/static/isr-ui.js?v=3"></script>
+<style>
+  /* change-detect layout only; colours, type and controls come from isr-ui.css */
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); }
+  @media (max-width: 640px) { .pair { grid-template-columns: 1fr; } }
+  .drop { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+    min-height: 150px; border: 2px dashed var(--line); background: var(--panel);
+    cursor: pointer; text-align: center; padding: 14px; }
+  .drop h2 { margin: 0; }
+  .drop.over { border-color: var(--accent); }
+  .drop.has { border-style: solid; border-color: var(--ok); }
+  .drop .name { font-weight: 600; word-break: break-all; }
+  .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: var(--gap) 0; }
+  .actions select { max-width: 100%; }
+  .result-head { display: inline-flex; align-items: baseline; gap: 14px; margin: 4px 0 var(--gap); }
+  .result-head h2 { margin: 0; }
+  .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .tabs .isr-btn { min-height: 36px; padding: 6px 14px; font-size: 14px; }
+  .tabs .isr-btn.active { border-color: var(--accent); color: var(--accent); }
+  .stage { position: relative; width: 100%; background: var(--bg); overflow: hidden; }
+  .stage img { display: block; width: 100%; height: auto; }
+  .stage .msg { padding: 30px; color: var(--bad); }
+  .swipe-top { position: absolute; inset: 0; }
+  .swipe-line { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent); pointer-events: none; }
+  .stage .lbl { position: absolute; top: 8px; padding: 2px 8px; font-size: 13px; background: var(--panel); }
+  #swipe { width: 100%; padding: 0; }
+  .changes { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--gap); margin-top: var(--gap); }
+  .change .crops { display: flex; gap: 6px; margin-top: 8px; }
+  .change figure { margin: 0; flex: 1; }
+  .change figure img { width: 100%; display: block; }
+  .change figcaption { text-align: center; }
+  .change .n { display: inline-block; min-width: 28px; text-align: center; font-family: var(--mono);
+    border: 1px solid var(--line-hi); margin-right: 8px; }
+  .aisug { margin-top: 8px; padding: 6px 10px; border-left: 3px solid var(--sim); font-size: 14px; }
+  .settings { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px 14px; margin: 10px 0; }
+  .settings label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 14px; }
+  .settings label.check { flex-direction: row; align-items: center; }
+  .settings label.check input { min-height: 0; }
+  .details-body { margin-top: 10px; display: grid; gap: var(--gap); }
+  .details-body h2 { margin-bottom: 6px; }
+  .details-body > div { min-width: 0; overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  td, th { border-bottom: 1px solid var(--line); padding: 4px 8px; text-align: left; }
+  .grade.good { color: var(--ok); } .grade.marginal { color: var(--warn); } .grade.failed { color: var(--bad); }
+  #batchtbl td { cursor: pointer; }
+  #history li { cursor: pointer; }
+  #history li:hover { color: var(--text); }
+  .pos { display: flex; gap: 10px; flex-wrap: wrap; }
+  .pos input { width: 160px; }
+</style>
+</head>
+<body>
+<header class="isr-bar">
+  <h1>Change detect</h1><span class="isr-sub">Before and after</span>
+  <div class="isr-right">
+    <button class="isr-pill" id="isr-status">Starting</button>
+    <a class="isr-kit-link" id="isr-kit-link" href="#">Kit</a>
+  </div>
+  <div class="isr-status-list" id="isr-status-list"></div>
+</header>
+<main>
+  <p class="isr-muted" style="margin-top:0">Training / demo tool. Verify every change by eye.</p>
+
+  <div class="pair">
+    <div class="drop" id="drop-before" data-key="before_files" data-label="Before">
+      <h2>Before</h2><span class="isr-muted">Drop an image, video or folder</span>
+    </div>
+    <div class="drop" id="drop-after" data-key="after_files" data-label="After">
+      <h2>After</h2><span class="isr-muted">Drop an image, video or folder</span>
+    </div>
+  </div>
+
+  <div class="actions">
+    <select id="sample" aria-label="Images to compare"></select>
+    <button id="run" class="isr-btn primary">Compare</button>
+    <span id="msg" class="isr-muted"></span>
+  </div>
+
+  <div id="banner" class="isr-banner bad" hidden></div>
+
+  <section id="results" hidden>
+    <div class="isr-card alert result-head" id="count-card">
+      <h2 id="count-word">Changes found</h2>
+      <span class="isr-big" id="count">00</span>
+      <span id="sim-tag" class="isr-tag sim" hidden>SIM</span>
+    </div>
+    <div class="tabs" id="viewtabs"></div>
+    <div class="tabs" id="modetabs">
+      <button class="isr-btn active" data-mode="side">Side by side</button>
+      <button class="isr-btn" data-mode="swipe">Swipe</button>
+      <button class="isr-btn" data-mode="heat">Heatmap</button>
+    </div>
+    <div id="stage" class="stage"></div>
+    <div id="swipectl" hidden><input type="range" id="swipe" min="0" max="100" value="50" aria-label="Swipe"></div>
+
+    <div id="changes" class="changes"></div>
+
+    <div class="actions">
+      <button id="ai" class="isr-btn">Describe with AI</button>
+      <button id="cot" class="isr-btn">Send to ATAK</button>
+      <button id="mesh" class="isr-btn">Send to mesh</button>
+      <a id="report-pdf" class="isr-btn" target="_blank">Open report</a>
+      <span id="share-msg" class="isr-muted"></span>
+    </div>
+
+    <details class="isr-more" id="result-details">
+      <summary>Result details</summary>
+      <div class="details-body">
+        <div>
+          <h2 class="isr-section">Position for ATAK</h2>
+          <div class="pos">
+            <input type="text" id="lat" placeholder="Latitude" aria-label="Latitude">
+            <input type="text" id="lon" placeholder="Longitude" aria-label="Longitude">
+          </div>
+          <div id="gpsnote" style="margin-top:6px"></div>
+        </div>
+        <div>
+          <h2 class="isr-section">Inputs</h2>
+          <div id="meta"></div>
+        </div>
+        <div>
+          <h2 class="isr-section">Alignment</h2>
+          <table id="align"></table>
+          <div id="warnings"></div>
+        </div>
+        <div>
+          <h2 class="isr-section">Files</h2>
+          <div id="reports"></div>
+        </div>
+        <div id="ai-note"></div>
+      </div>
+    </details>
+  </section>
+
+  <div class="isr-card" id="batch-panel" hidden style="margin-top:var(--gap)">
+    <h2>Folder comparison <span id="batch-id"></span></h2>
+    <div id="batch-sum" class="isr-muted"></div>
+    <table id="batchtbl" style="margin-top:6px"></table>
+    <div id="batch-unpaired" class="isr-muted" style="margin-top:6px"></div>
+  </div>
+
+  <details class="isr-more">
+    <summary>Report history</summary>
+    <ul class="isr-list" id="history"><li>No comparisons yet.</li></ul>
+  </details>
+
+  <details class="isr-more">
+    <summary>Details</summary>
+    <div class="details-body">
+      <div>
+        <h2 class="isr-section">Settings</h2>
+        <div class="settings">
+          <label>Sensitivity <span id="sens-v">0.50</span><input type="range" id="sens" min="0" max="1" step="0.05" value="0.5"></label>
+          <label>Smallest change (px at 1600 px wide)<input type="number" id="minarea" value="300" min="20" step="50"></label>
+          <label>360 images<select id="m360"><option value="auto">Detect</option><option value="on">Always 360</option><option value="off">Treat as flat</option></select></label>
+          <label>Before video time (s)<input type="number" id="bt" step="0.5" min="0"></label>
+          <label>After video time (s)<input type="number" id="at" step="0.5" min="0"></label>
+          <label class="check"><input type="checkbox" id="yolo" checked> Label objects with YOLO</label>
+        </div>
+      </div>
+      <div>
+        <h2 class="isr-section">SD card</h2>
+        <div class="drop" id="drop-all" data-key="files" data-label="SD card" style="min-height:90px">
+          <span>Drop a whole SD card or DCIM folder</span>
+          <span class="isr-muted">It is split into before and after at the largest time gap. Then press Compare.</span>
+        </div>
+        <p><button id="clear-batch" class="isr-btn">Clear dropped files</button></p>
+        <p>Dropping a folder on Before and another on After pairs the photos by position and time.</p>
+      </div>
+      <div>
+        <h2 class="isr-section">Models and services</h2>
+        <div id="model-info"></div>
+      </div>
+    </div>
+  </details>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let status = null, result = null, viewIdx = 0, mode = 'side';
+const OWN = '__own__';
+
+function el(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') e.className = v; else if (k === 'text') e.textContent = v; else e.setAttribute(k, v);
+  }
+  for (const k of kids) e.append(k);
+  return e;
+}
+
+// ---------------------------------------------------------------- status pill
+function checks(s) {
+  const out = [{ name: 'Server', state: 'ok', text: s.simulate ? 'simulate mode' : s.profile + ' · ' + s.accelerator }];
+  const ai = s.ai;
+  out.push({ name: 'AI', optional: true, state: ai.enabled ? 'ok' : 'idle',
+             text: !ai.enabled ? 'off' : ai.active === 'gemini' ? 'Gemini (cloud)' : (ai.local.model || 'local') });
+  const ye = s.yolo.error || '';
+  const yBusy = ye === 'loading' || ye.startsWith('downloading');
+  out.push({ name: 'YOLO', optional: true,
+             state: s.yolo.enabled ? 'ok' : (yBusy || ye.startsWith('disabled')) ? 'idle' : 'warn',
+             text: s.yolo.enabled ? 'on (' + s.yolo.device + ')' : yBusy ? 'loading' : ye.startsWith('disabled') ? 'off' : 'model missing' });
+  const t = s.tak;
+  out.push({ name: 'TAK', optional: true,
+             state: !t.enabled ? 'idle' : t.registered ? 'ok' : 'bad',
+             text: !t.enabled ? 'off' : t.registered ? 'connected' : t.pending ? t.pending + ' waiting' : 'not connected' });
+  const m = s.mesh;
+  out.push({ name: 'Mesh', optional: true,
+             state: !m.enabled ? 'idle' : m.last_error ? 'bad' : 'ok',
+             text: !m.enabled ? 'off' : m.last_error ? 'broker down' : m.sent ? m.sent + ' sent' : 'ready' });
+  return out;
+}
+
+function modelInfo(s) {
+  const ai = s.ai, rows = [];
+  rows.push('AI descriptions: ' + (ai.active === 'gemini'
+    ? ai.source + '. Sends the crops of each change to Google, so use demo images only.'
+    : ai.active === 'openai_compat' ? ai.source + ', on this network.'
+    : 'off. Start Ollama with ' + ai.local.model + ', or set GEMINI_API_KEY.'));
+  if (ai.local && ai.local.error) rows.push('Local AI: ' + ai.local.error);
+  rows.push('YOLO: ' + (s.yolo.enabled ? 'on (' + s.yolo.device + ')' : (s.yolo.error || 'off')) + (s.yolo.model ? ' · ' + s.yolo.model : ''));
+  rows.push('TAK: ' + s.tak.host + ':' + s.tak.port + ' as ' + s.tak.callsign + (s.tak.last_error ? ' · ' + s.tak.last_error : ''));
+  rows.push('Mesh: ' + (s.mesh.enabled ? (s.mesh.last_error || 'ready') : 'off'));
+  rows.push('Heartbeat: ' + (s.heartbeat.connected ? 'publishing' : (s.heartbeat.last_error || 'not connected')));
+  rows.push('Position: ' + (s.sensor ? s.sensor.lat + ', ' + s.sensor.lon + ' (SENSOR_LAT/SENSOR_LON)' : 'not set; photo GPS or a typed position is used'));
+  rows.push('Reports are saved in ' + s.reports_dir + '.');
+  rows.push('Version ' + s.version + ' · profile ' + s.profile + ' · ' + (s.max_dim ? 'downscaled to ' + s.max_dim + ' px' : 'full resolution'));
+  $('model-info').replaceChildren(...rows.map(r => el('div', { text: r })));
+}
+
+async function refreshStatus() {
+  try {
+    status = await (await fetch('/api/status')).json();
+    ISR.setStatus(checks(status));
+    modelInfo(status);
+    $('ai').disabled = !status.ai.enabled;
+    $('ai').title = status.ai.enabled ? '' : 'AI descriptions are off (see Details)';
+  } catch (e) {
+    ISR.setStatus([{ name: 'Server', state: 'bad', text: 'not reachable' }]);
+  }
+}
+
+// ---------------------------------------------------------------- inputs
+async function loadSamples() {
+  const s = await (await fetch('/api/samples')).json();
+  $('sample').replaceChildren(el('option', { value: OWN, text: 'Your images (drop above)' }),
+    ...s.map(x => el('option', { value: x.id, text: 'Sample: ' + x.title })));
+  if (s.length) $('sample').value = s[0].id;
+}
+
+const IMG_RE = /\.(jpe?g|heic|heif|png|tiff?|webp|insp)$/i;
+const MEDIA_RE = /\.(jpe?g|heic|heif|png|tiff?|webp|insp|mp4|mov|insv)$/i;
+const dropped = { files: [], before_files: [], after_files: [] };
+
+function readAllEntries(dirEntry) {
+  return new Promise((resolve) => {
+    const reader = dirEntry.createReader(); const out = [];
+    const next = () => reader.readEntries((batch) => { if (!batch.length) resolve(out); else { out.push(...batch); next(); } }, () => resolve(out));
+    next();
+  });
+}
+async function walk(entry, out) {
+  if (entry.isFile) {
+    await new Promise((res) => entry.file((f) => { if (MEDIA_RE.test(f.name) && !f.name.startsWith('.')) out.push(f); res(); }, () => res()));
+  } else if (entry.isDirectory) {
+    for (const e of await readAllEntries(entry)) await walk(e, out);
+  }
+}
+function resetDrop(zone) {
+  zone.classList.remove('has');
+  zone.querySelectorAll('.name').forEach(n => n.remove());
+}
+function setDrop(zone) {
+  const files = dropped[zone.dataset.key], n = files.length;
+  resetDrop(zone);
+  if (!n) return;
+  zone.classList.add('has');
+  const mb = (files.reduce((a, f) => a + f.size, 0) / 1e6).toFixed(0);
+  zone.append(el('span', { class: 'name', text: n === 1 ? files[0].name : `${n} images (${mb} MB)` }));
+  $('sample').value = OWN;
+  $('msg').textContent = '';
+}
+document.querySelectorAll('.drop').forEach((zone) => {
+  const picker = el('input', { type: 'file', accept: 'image/*,video/*,.heic,.insp,.insv' });
+  if (zone.id === 'drop-all') { picker.multiple = true; picker.webkitdirectory = true; }
+  picker.hidden = true;
+  zone.after(picker);
+  zone.onclick = () => picker.click();
+  picker.onchange = () => { dropped[zone.dataset.key] = [...picker.files].filter(f => MEDIA_RE.test(f.name) && !f.name.startsWith('.')); setDrop(zone); };
+  zone.ondragover = (e) => { e.preventDefault(); zone.classList.add('over'); };
+  zone.ondragleave = () => zone.classList.remove('over');
+  zone.ondrop = async (e) => {
+    e.preventDefault(); zone.classList.remove('over');
+    const out = [];
+    const entries = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+    if (entries.length) for (const en of entries) await walk(en, out);
+    else out.push(...[...e.dataTransfer.files].filter(f => MEDIA_RE.test(f.name)));
+    dropped[zone.dataset.key] = out; setDrop(zone);
+  };
+});
+$('clear-batch').onclick = () => {
+  for (const k in dropped) dropped[k] = [];
+  document.querySelectorAll('.drop').forEach(resetDrop);
+  $('msg').textContent = '';
+};
+$('sens').oninput = () => $('sens-v').textContent = Number($('sens').value).toFixed(2);
+
+function formData() {
+  const f = new FormData();
+  f.append('sensitivity', $('sens').value);
+  f.append('min_area', $('minarea').value);
+  f.append('mode360', $('m360').value);
+  f.append('use_yolo', $('yolo').checked ? 'true' : 'false');
+  if ($('bt').value) f.append('before_time_s', $('bt').value);
+  if ($('at').value) f.append('after_time_s', $('at').value);
+  return f;
+}
+
+function busy(on, text) {
+  $('run').disabled = on;
+  $('msg').textContent = text || '';
+}
+
+async function analyse(f) {
+  busy(true, 'Comparing…');
+  try {
+    const r = await fetch('/api/analyze', { method: 'POST', body: f });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    busy(false, `Done in ${j.elapsed_s} s`);
+    show(j); loadHistory();
+  } catch (e) { busy(false, 'Comparison failed: ' + e.message); }
+}
+
+async function batch(f) {
+  busy(true, 'Uploading…');
+  try {
+    const r = await fetch('/api/batch', { method: 'POST', body: f });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    pollBatch(j.id);
+  } catch (e) { busy(false, 'Upload failed: ' + e.message); }
+}
+
+$('run').onclick = () => {
+  const b = dropped.before_files, a = dropped.after_files;
+  if ($('sample').value !== OWN) { const f = formData(); f.append('sample', $('sample').value); return analyse(f); }
+  if (b.length === 1 && a.length === 1) {
+    const f = formData(); f.append('before', b[0]); f.append('after', a[0]); return analyse(f);
+  }
+  const twoBox = b.length && a.length;
+  if (!twoBox && !dropped.files.length) { $('msg').textContent = 'Drop a Before and an After image, or pick a sample.'; return; }
+  const f = formData(), mt = {};
+  const add = (key) => dropped[key].filter(x => IMG_RE.test(x.name)).forEach(file => { f.append(key, file, file.name); mt[file.name] = file.lastModified; });
+  if (twoBox) { add('before_files'); add('after_files'); } else add('files');
+  f.append('mtimes', JSON.stringify(mt));
+  batch(f);
+};
+
+// ---------------------------------------------------------------- result
+const url = (file) => file ? `/results/${result.id}/${file}` : null;
+
+async function openResult(id) {
+  const r = await fetch('/api/results/' + id);
+  if (r.ok) show(await r.json());
+}
+
+function show(r) {
+  result = r; viewIdx = 0;
+  $('results').hidden = false;
+  location.hash = r.id;
+  const n = r.alignment_ok ? r.changes_total : 0;
+  $('count').textContent = r.alignment_ok ? String(n).padStart(2, '0') : '––';
+  $('count-word').textContent = r.alignment_ok ? (n === 1 ? 'Change found' : 'Changes found') : 'Not lined up';
+  $('count-card').className = 'isr-card result-head ' + (r.alignment_ok ? 'alert' : 'fault');
+  $('sim-tag').hidden = !r.synthetic;
+  $('banner').hidden = r.alignment_ok;
+  $('banner').textContent = 'The two images could not be lined up, so no changes are called. Retake from the same spot, height and heading.';
+
+  const b = r.inputs.before, a = r.inputs.after;
+  const fmt = (m) => `${m.name}${m.time ? ' · ' + m.time : ''}${m.frame_time_s != null ? ' · frame at ' + m.frame_time_s + ' s' : ''}${m.lat != null ? ' · GPS ' + m.lat.toFixed(5) + ', ' + m.lon.toFixed(5) : ' · no GPS'}`;
+  let meta = `Before: ${fmt(b)}. After: ${fmt(a)}. Mode ${r.mode}${r.projection === 'dual-fisheye' ? ' (Insta360 dual-fisheye, unwarped)' : ''}`;
+  if (r.yaw_offset) meta += ` · heading offset ${r.yaw_offset.deg}° (confidence ${r.yaw_offset.confidence})`;
+  if (r.video) meta += ` · video frames matched with ${r.video.match_inliers} inliers`;
+  meta += r.yolo_used ? ' · YOLO labels on' : ' · YOLO labels off';
+  $('meta').textContent = r.summary + ' ' + meta;
+
+  const tbl = $('align');
+  tbl.replaceChildren(el('tr', {}, ...['View', 'Alignment', 'Method', 'Inliers', 'Ratio', 'Overlap', 'Spread', 'Error px', 'Changes'].map(h => el('th', { text: h }))));
+  const warns = [];
+  r.views.forEach(v => {
+    const al = v.alignment;
+    tbl.append(el('tr', {}, el('td', { text: v.name }), el('td', { class: 'grade ' + al.grade, text: al.grade }),
+      el('td', { text: al.method }), el('td', { text: al.inliers + '/' + al.matches }), el('td', { text: al.inlier_ratio.toFixed(2) }),
+      el('td', { text: Math.round(al.overlap * 100) + '%' }), el('td', { text: al.inlier_spread.toFixed(2) }),
+      el('td', { text: al.reproj_error_px ?? '-' }), el('td', { text: al.ok ? v.changes.length : 'not called' })));
+    (al.reasons || []).forEach(x => warns.push(`${v.name}: ${x}`));
+    (v.warnings || []).forEach(x => warns.push(`${v.name}: ${x}`));
+  });
+  $('warnings').replaceChildren(...warns.map(w => el('div', { text: w })));
+
+  $('viewtabs').hidden = r.views.length < 2;
+  $('viewtabs').replaceChildren(...r.views.map((v, i) => {
+    const btn = el('button', { class: 'isr-btn', text: `${v.name} (${v.alignment.ok ? v.changes.length : 'no match'})` });
+    btn.onclick = () => { viewIdx = i; renderStage(); };
+    return btn;
+  }));
+  renderStage(); renderChanges();
+
+  $('report-pdf').href = url(r.report.pdf);
+  $('reports').replaceChildren(
+    el('a', { href: url(r.report.png), target: '_blank', text: 'Report PNG' }), ' · ',
+    el('a', { href: url(r.report.pdf), target: '_blank', text: 'Report PDF' }),
+    el('div', { text: 'Saved in ' + ((status && status.reports_dir) || 'reports') + '/' + r.id }));
+  let note;
+  if (r.gps) { $('lat').value = r.gps.lat; $('lon').value = r.gps.lon; note = `From ${r.gps.source}: where the camera was, not the exact change. Edit to override.`; }
+  else if (status && status.sensor) { $('lat').value = status.sensor.lat; $('lon').value = status.sensor.lon; note = 'No GPS in these files, so the set position (SENSOR_LAT/SENSOR_LON) is used. Edit to override.'; }
+  else { $('lat').value = ''; $('lon').value = ''; note = 'No GPS in these files. Type a position here before sending to ATAK.'; }
+  if (r.synthetic) note += ' Sample images: ATAK remarks start "SIMULATED:" and mesh texts start "[SIM]".';
+  $('gpsnote').textContent = note;
+  $('cot').disabled = !r.alignment_ok;
+  $('share-msg').textContent = '';
+}
+
+function renderStage() {
+  const v = result.views[viewIdx];
+  [...$('viewtabs').children].forEach((b, i) => b.classList.toggle('active', i === viewIdx));
+  [...$('modetabs').children].forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+  const st = $('stage'); st.replaceChildren(); $('swipectl').hidden = true;
+  const im = v.images;
+  if (!v.alignment.ok && mode !== 'side') {
+    st.append(el('div', { class: 'msg', text: 'These images could not be lined up. Use Side by side.' }));
+    return;
+  }
+  if (mode === 'side') st.append(el('img', { src: url(im.side), alt: 'Before and after with change boxes' }));
+  else if (mode === 'heat') st.append(el('img', { src: url(im.heat), alt: 'Difference heatmap' }), el('span', { class: 'lbl', style: 'left:8px', text: 'Brighter means more change' }));
+  else if (mode === 'swipe') {
+    const base = el('img', { src: url(im.before), alt: 'Before' });
+    const topWrap = el('div', { class: 'swipe-top' }, el('img', { src: url(im.after_aligned), alt: 'After' }));
+    const line = el('div', { class: 'swipe-line' });
+    st.append(base, topWrap, line, el('span', { class: 'lbl', style: 'left:8px', text: 'Before' }), el('span', { class: 'lbl', style: 'right:8px', text: 'After' }));
+    const upd = () => { const p = $('swipe').value; topWrap.style.clipPath = `inset(0 0 0 ${p}%)`; line.style.left = p + '%'; };
+    $('swipe').oninput = upd; upd(); $('swipectl').hidden = false;
+  }
+}
+$('modetabs').onclick = (e) => { if (e.target.dataset.mode) { mode = e.target.dataset.mode; renderStage(); } };
+
+function renderChanges() {
+  const all = result.views.flatMap(v => v.changes);
+  if (!result.alignment_ok) { $('changes').replaceChildren(); return; }
+  if (!all.length) { $('changes').replaceChildren(el('div', { class: 'isr-muted', text: 'No changes above the size and sensitivity set in Details.' })); return; }
+  $('changes').replaceChildren(...all.map(c => {
+    const card = el('div', { class: 'isr-card change' },
+      el('div', {}, el('span', { class: 'n', text: c.n }), el('b', { text: c.label_text || c.kind })),
+      el('div', { class: 'crops' },
+        el('figure', {}, el('img', { src: url(c.crops.before), alt: 'before' }), el('figcaption', { class: 'isr-muted', text: 'Before' })),
+        el('figure', {}, el('img', { src: url(c.crops.after), alt: 'after' }), el('figcaption', { class: 'isr-muted', text: 'After' }))));
+    card.title = `${c.view !== 'main' ? c.view + ' · ' : ''}area ${c.area} px · score ${c.score}${c.label_text ? ' · shape: ' + c.kind : ''}`;
+    if (c.ai_suggestion) card.append(el('div', { class: 'aisug' }, el('b', { text: 'AI guess: ' }), c.ai_suggestion));
+    return card;
+  }));
+}
+
+// ---------------------------------------------------------------- actions
+$('ai').onclick = async () => {
+  $('ai').disabled = true; $('share-msg').textContent = 'Asking the AI…';
+  try {
+    const r = await fetch(`/api/results/${result.id}/ai`, { method: 'POST' });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail);
+    result = j.result; renderChanges();
+    $('share-msg').textContent = `${j.described} described. AI guesses can be wrong.`;
+    $('ai-note').textContent = j.error ? 'AI: ' + j.error : '';
+  } catch (e) { $('share-msg').textContent = 'The AI did not answer. See Details.'; $('ai-note').textContent = 'AI: ' + e.message; }
+  finally { $('ai').disabled = !(status && status.ai.enabled); }
+};
+
+$('cot').onclick = async () => {
+  const body = {};
+  const lat = parseFloat($('lat').value), lon = parseFloat($('lon').value);
+  const fromGps = result.gps && lat === result.gps.lat && lon === result.gps.lon;
+  const fromSensor = !result.gps && status && status.sensor && lat === status.sensor.lat && lon === status.sensor.lon;
+  if (!fromGps && !fromSensor && !isNaN(lat) && !isNaN(lon)) { body.lat = lat; body.lon = lon; }
+  const r = await fetch(`/api/results/${result.id}/cot`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const j = await r.json();
+  if (r.ok) $('share-msg').textContent = j.tak.registered ? 'Sent to ATAK.' : 'Queued for ATAK; it goes when the TAK server connects.';
+  else { $('share-msg').textContent = 'Not sent: ' + j.detail; if (r.status === 400) $('result-details').open = true; }
+  refreshStatus();
+};
+$('mesh').onclick = async () => {
+  const r = await fetch(`/api/results/${result.id}/mesh`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  const j = await r.json();
+  $('share-msg').textContent = j.sent ? 'Sent to mesh: ' + j.text
+    : r.status === 429 ? 'Not sent: ' + j.detail : 'Not sent: the mesh broker is not reachable. See Details.';
+  refreshStatus();
+};
+
+// ---------------------------------------------------------------- history and folder batches
+async function loadHistory() {
+  const h = await (await fetch('/api/results')).json();
+  if (!h.length) return;
+  $('history').replaceChildren(...h.map(r => {
+    const li = el('li', {}, el('span', { class: 'isr-mono', text: r.id }),
+      el('span', { text: (r.alignment_ok ? '' : 'Not lined up. ') + r.summary }));
+    li.onclick = () => { openResult(r.id); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+    return li;
+  }));
+}
+
+async function pollBatch(id) {
+  const r = await fetch('/api/batch/' + id); if (!r.ok) return;
+  const j = await r.json();
+  showBatch(j);
+  if (j.state === 'pairing' || j.state === 'analysing') setTimeout(() => pollBatch(id), 2000);
+  else { busy(false, j.state === 'done' ? `Done in ${j.elapsed_s} s` : ''); loadHistory(); }
+}
+function showBatch(j) {
+  $('batch-panel').hidden = false;
+  $('batch-id').textContent = j.id;
+  $('msg').textContent = j.state === 'done' ? '' : j.summary;
+  let sum = j.summary + (j.total ? ` (${j.progress}/${j.total})` : '');
+  if (j.split) sum += ` · split at a ${Math.round(j.split.split_gap_s / 60)} min gap (${j.split.split_after} | ${j.split.split_before})`;
+  $('batch-sum').textContent = sum;
+  const t = $('batchtbl');
+  t.replaceChildren(el('tr', {}, ...['#', 'Before', 'After', 'Lined up', 'Changes'].map(h => el('th', { text: h }))));
+  (j.pairs || []).forEach((p, i) => {
+    const tr = el('tr', {}, el('td', { text: i + 1 }), el('td', { text: p.before }), el('td', { text: p.after }),
+      el('td', { class: 'grade ' + (p.grade || ''), text: p.error ? 'error' : (p.grade || '…') }),
+      el('td', { text: p.result_id ? (p.alignment_ok ? p.changes : '–') : '…' }));
+    if (p.result_id) tr.onclick = () => openResult(p.result_id);
+    t.append(tr);
+  });
+  const un = [...(j.unpaired_before || []).map(n => 'before: ' + n), ...(j.unpaired_after || []).map(n => 'after: ' + n)];
+  $('batch-unpaired').textContent = un.length ? `No match for ${un.length}: ${un.slice(0, 12).join(', ')}${un.length > 12 ? '…' : ''}` : '';
+  if (j.error) $('batch-unpaired').textContent = 'The folder comparison stopped: ' + j.error;
+}
+
+(async () => {
+  await refreshStatus(); await loadSamples(); await loadHistory();
+  const id = location.hash.slice(1);
+  if (id) openResult(id);
+  else {
+    const h = await (await fetch('/api/results?limit=1')).json();
+    if (h.length) openResult(h[0].id);
+  }
+  setInterval(refreshStatus, 5000);
+})();
+</script>
+</body>
+</html>
